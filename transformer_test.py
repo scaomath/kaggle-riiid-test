@@ -16,16 +16,6 @@ from torch.autograd import Variable
 from torchsummary import summary
 
 from sklearn.metrics import roc_auc_score
-# %%
-'''
-Download Kaggle data using kaggle API:
-kaggle competitions download riiid-test-answer-prediction --path ./data
-'''
-DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
-start = time()
-data = dt.fread(DATA_DIR+"train.csv")
-print(f"Readding train.csv in {time()-start} seconds")
-# df_train = data.to_pandas()
 
 # %%
 TRAIN_DTYPES = {
@@ -41,76 +31,68 @@ TRAIN_DTYPES = {
     'prior_question_had_explanation': 'boolean'
 }
 DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
-start = time()
-df_train = pd.read_csv(DATA_DIR+'train.csv', 
-                       nrows=40_00_000, 
-                       dtype=TRAIN_DTYPES, 
-                       usecols=TRAIN_DTYPES.keys())
-print(f"Readding train.csv in {time()-start} seconds")
-
-# %%
 LAST_N = 100 # this parameter denotes how many last seen content_ids I am going to consider <aka the max_seq_len or the window size>.
-FILLNA_VAL = 100 # fillers for the values
+FILLNA_VAL = 100 # fillers for the values (a unique value)
 TQDM_INT = 15 # tqdm update interval
-
-df_questions = pd.read_csv(DATA_DIR+'questions.csv')
-
-df_train['prior_question_had_explanation'] = df_train['prior_question_had_explanation'].astype(np.float16).fillna(-1).astype(np.int8)
-df_train = df_train[df_train.content_type_id == 0]
-
-part_ids_map = dict(zip(df_questions.question_id, df_questions.part))
-df_train['part_id'] = df_train['content_id'].map(part_ids_map)
-
-df_train["prior_question_elapsed_time"].fillna(FILLNA_VAL, inplace=True) # different than all current values
-df_train["prior_question_elapsed_time"] = df_train["prior_question_elapsed_time"] // 1000
-# %%
-# we will be using a deque as it automatically limits the max_size as per the Data Strucutre's defination itself
-# so we don't need to manage that...
-
-d = {}
-user_id_to_idx = {}
-
 PAD = 0
+BATCH_SIZE = 128
+VAL_BATCH_SIZE = 512
+NROWS_TRAIN = 40_000_000
+NROWS_VALID = 10_000_000
 
-grp = df_train.groupby("user_id").tail(LAST_N) # Select last_n rows of each user.
-num_user_id_grp = len(grp.groupby("user_id"))
+def get_feats_tranformer(data_df):
+    '''
+    Using a deque as it automatically limits the max_size as per the Data Strucutre's defination itself
+    so we don't need to manage that...
+    '''
+    df = {}
+    user_id_to_idx = {}
+    grp = data_df.groupby("user_id").tail(LAST_N) # Select last_n rows of each user.
+    grp_user = grp.groupby("user_id")
+    num_user_id_grp = len(grp_user)
 
-with tqdm(total=num_user_id_grp) as pbar:
-    for idx, row in grp.groupby("user_id").agg({
-        "content_id":list, "answered_correctly":list, "task_container_id":list, 
-        "part_id":list, "prior_question_elapsed_time":list
-        }).reset_index().iterrows():
-        # here we make a split whether a user has more than equal to 100 entries or less than that
-        # if it's less than LAST_N, then we need to PAD it using the PAD token defined as 0 by me in this cell block
-        # also, padded will be True where we have done padding obviously, rest places it's False.
-        if len(row["content_id"]) >= 100:
-            d[idx] = {
-                "user_id": row["user_id"],
-                "content_id" : deque(row["content_id"], maxlen=LAST_N),
-                "answered_correctly" : deque(row["answered_correctly"], maxlen=LAST_N),
-                "task_container_id" : deque(row["task_container_id"], maxlen=LAST_N),
-                "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"], maxlen=LAST_N),
-                "part_id": deque(row["part_id"], maxlen=LAST_N),
-                "padded" : deque([False]*100, maxlen=LAST_N)
-            }
-        else:
-            # we have to pad...
-            # (max_batch_len - len(seq))
-            d[idx] = {
-                "user_id": row["user_id"],
-                "content_id" : deque(row["content_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                "answered_correctly" : deque(row["answered_correctly"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                "task_container_id" : deque(row["task_container_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                "part_id": deque(row["part_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                "padded" : deque([False]*len(row["content_id"]) + [True]*(100-len(row["content_id"])), maxlen=LAST_N)
-            }
-        user_id_to_idx[row["user_id"]] = idx
-        if idx % TQDM_INT == 0:
-            pbar.update(TQDM_INT)
+    with tqdm(total=num_user_id_grp) as pbar:
+        for idx, row in grp_user.agg({
+            "content_id":list, "answered_correctly":list, "task_container_id":list, 
+            "part_id":list, "prior_question_elapsed_time":list
+            }).reset_index().iterrows():
+            # here we make a split whether a user has more than equal to 100 entries or less than that
+            # if it's less than LAST_N, then we need to PAD it using the PAD token defined as 0 by me in this cell block
+            # also, padded will be True where we have done padding obviously, rest places it's False.
+            if len(row["content_id"]) >= 100:
+                df[idx] = {
+                    "user_id": row["user_id"],
+                    "content_id" : deque(row["content_id"], maxlen=LAST_N),
+                    "answered_correctly" : deque(row["answered_correctly"], maxlen=LAST_N),
+                    "task_container_id" : deque(row["task_container_id"], maxlen=LAST_N),
+                    "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"], maxlen=LAST_N),
+                    "part_id": deque(row["part_id"], maxlen=LAST_N),
+                    "padded" : deque([False]*100, maxlen=LAST_N)
+                }
+            else:
+                # we have to pad...
+                # (max_batch_len - len(seq))
+                df[idx] = {
+                    "user_id": row["user_id"],
+                    "content_id" : deque(row["content_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
+                    "answered_correctly" : deque(row["answered_correctly"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
+                    "task_container_id" : deque(row["task_container_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
+                    "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
+                    "part_id": deque(row["part_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
+                    "padded" : deque([False]*len(row["content_id"]) + [True]*(100-len(row["content_id"])), maxlen=LAST_N)
+                }
+            user_id_to_idx[row["user_id"]] = idx
+            if idx % TQDM_INT == 0:
+                pbar.update(TQDM_INT)
         # if in future a new user comes, we will just increase the counts as of now... <WIP>
-# %%
-print(user_id_to_idx[115], d[0]) # user_id 115; I encourage you to match the same with the dataframes.
+    return df, user_id_to_idx
+
+
+def roc_auc_compute_fn(y_targets, y_preds):
+    y_true = y_targets.cpu().numpy()
+    y_pred = y_preds.cpu().numpy()
+    return roc_auc_score(y_true, y_pred)
+
 # %%
 class TransformerModel(nn.Module):
 
@@ -166,8 +148,6 @@ class TransformerModel(nn.Module):
 
 def pad_seq(seq: List[int], max_batch_len: int = LAST_N, pad_value: int = True) -> List[int]:
     return seq + (max_batch_len - len(seq)) * [pad_value]
-# %%
-# pytorch dataset class
 
 class Riiid(torch.utils.data.Dataset):
     
@@ -195,9 +175,37 @@ def collate_fn(batch):
     # remember the order
     return content_id, task_id, part_id, prior_question_elapsed_time, padded, labels
 
-dataset = Riiid(d=d)
-print(dataset[0]) # sample dataset
+
 # %%
+start = time()
+df_train = pd.read_csv(DATA_DIR+'train.csv', 
+                       nrows=NROWS_TRAIN, 
+                       dtype=TRAIN_DTYPES, 
+                       usecols=TRAIN_DTYPES.keys())
+print(f"Readding train.csv in {time()-start} seconds\n\n")
+
+df_questions = pd.read_csv(DATA_DIR+'questions.csv')
+
+start = time()
+df_train['prior_question_had_explanation'] = df_train['prior_question_had_explanation'].astype(np.float16).fillna(-1).astype(np.int8)
+df_train = df_train[df_train.content_type_id == 0]
+
+part_ids_map = dict(zip(df_questions.question_id, df_questions.part))
+df_train['part_id'] = df_train['content_id'].map(part_ids_map)
+
+df_train["prior_question_elapsed_time"].fillna(FILLNA_VAL, inplace=True) # different than all current values
+df_train["prior_question_elapsed_time"] = df_train["prior_question_elapsed_time"] // 1000
+
+
+d, user_id_to_idx = get_feats_tranformer(df_train)
+print(f"Processing train.csv in {time()-start} seconds\n\n")
+print(user_id_to_idx[115], d[0]) # user_id 115; I encourage you to match the same with the dataframes.
+
+
+# %%
+
+dataset = Riiid(d=d)
+# print(dataset[0]) # sample dataset
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print('Using device:', device)
 sample = next(iter(torch.utils.data.DataLoader(dataset=dataset, 
@@ -206,35 +214,45 @@ sample = next(iter(torch.utils.data.DataLoader(dataset=dataset,
 model = TransformerModel(ninp=LAST_N, nhead=4, nhid=128, nlayers=3, dropout=0.3)
 model = model.to(device)
 # %% training
-BATCH_SIZE = 32
 losses = []
-criterion = nn.BCEWithLogitsLoss()
+# criterion = nn.BCEWithLogitsLoss()
+criterion = nn.CrossEntropyLoss()
 lr = 1e-3 # learning rate
 optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 model.train()
+dataset_train = torch.utils.data.DataLoader(dataset=dataset, 
+                                            batch_size=BATCH_SIZE,
+                                            collate_fn=collate_fn, 
+                                            num_workers=8)
 
+len_dataset = len(dataset_train)
 
-for idx,batch in tqdm(enumerate(torch.utils.data.DataLoader(dataset=dataset, 
-                                                            batch_size=BATCH_SIZE,             collate_fn=collate_fn, 
-                                                            num_workers=8))):
-    content_id, _, part_id, prior_question_elapsed_time, mask, labels = batch
-    content_id = Variable(content_id.cuda())
-    part_id = Variable(part_id.cuda())
-    prior_question_elapsed_time = Variable(prior_question_elapsed_time.cuda())
-    mask = Variable(mask.cuda())
-    labels = Variable(labels.cuda())
-    optimizer.zero_grad()
-    with torch.set_grad_enabled(mode=True):
-        output = model(content_id, part_id, prior_question_elapsed_time, mask)
-        # output is (N,S,2) # i am working on it
-        loss = criterion(output[:,:,1], labels)
-        loss.backward()
-        losses.append(loss.cpu().detach().data.numpy())
-        optimizer.step()
+with tqdm(total=len_dataset) as pbar:
+    for idx,batch in enumerate(dataset_train):
+        content_id, _, part_id, prior_question_elapsed_time, mask, labels = batch
+        content_id = Variable(content_id.cuda())
+        part_id = Variable(part_id.cuda())
+        prior_question_elapsed_time = Variable(prior_question_elapsed_time.cuda())
+        mask = Variable(mask.cuda())
+        labels = Variable(labels.cuda().long())
+        optimizer.zero_grad()
+        with torch.set_grad_enabled(mode=True):
+            output = model(content_id, part_id, prior_question_elapsed_time, mask)
+            # output is (N,S,2) # i am working on it
+            
+            # loss = criterion(output[:,:,1], labels) # BCEWithLogitsLoss
+            loss = criterion(output.reshape(-1, 2), labels.reshape(-1)) # Flatten and use crossEntropy
+            loss.backward()
+            losses.append(loss.cpu().detach().data.numpy())
+            optimizer.step()
+        if idx % TQDM_INT == 0:
+            pbar.update(TQDM_INT)
 # %%
 
-df_valid = pd.read_csv(DATA_DIR+"train.csv", nrows=20_00_000, dtype=TRAIN_DTYPES, 
-                       usecols=TRAIN_DTYPES.keys(), skiprows=range(1, 40_00_000)
+df_valid = pd.read_csv(DATA_DIR+"train.csv", nrows=NROWS_VALID, 
+                                             dtype=TRAIN_DTYPES, 
+                                             usecols=TRAIN_DTYPES.keys(), 
+                                             skiprows=range(1, NROWS_TRAIN)
                       )
 df_valid = df_valid[df_valid.content_type_id == 0]
 
@@ -243,68 +261,46 @@ df_valid["prior_question_elapsed_time"] = df_valid["prior_question_elapsed_time"
 
 part_ids_map = dict(zip(df_questions.question_id, df_questions.part))
 df_valid['part_id'] = df_valid['content_id'].map(part_ids_map)
+d, user_id_to_idx = get_feats_tranformer(df_valid)
 # %%
-d = {}
-user_id_to_idx = {}
-PAD = 0
-
-grp = df_valid.groupby("user_id").tail(LAST_N)
-num_user_id_grp = len(grp.groupby("user_id"))
-with tqdm(total=num_user_id_grp) as pbar:
-    for idx, row in grp.groupby("user_id").agg({
-        "content_id":list, "answered_correctly":list, "task_container_id":list, 
-        "part_id":list, "prior_question_elapsed_time":list
-    }).reset_index().iterrows():
-        if len(row["content_id"]) >= 100:
-            d[idx] = {
-                "user_id": row["user_id"],
-                "content_id" : deque(row["content_id"], maxlen=LAST_N),
-                "answered_correctly" : deque(row["answered_correctly"], maxlen=LAST_N),
-                "task_container_id" : deque(row["task_container_id"], maxlen=LAST_N),
-                "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"], maxlen=LAST_N),
-                "part_id": deque(row["part_id"], maxlen=LAST_N),
-                "padded" : deque([False]*100, maxlen=LAST_N)
-            }
-        else:
-            # we have to pad...
-            # (max_batch_len - len(seq))
-            d[idx] = {
-                "user_id": row["user_id"],
-                "content_id" : deque(row["content_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                "answered_correctly" : deque(row["answered_correctly"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                "task_container_id" : deque(row["task_container_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                "part_id": deque(row["part_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                "padded" : deque([False]*len(row["content_id"]) + [True]*(100-len(row["content_id"])), maxlen=LAST_N)
-            }
-        user_id_to_idx[row["user_id"]] = idx
-        if idx % TQDM_INT == 0:
-            pbar.update(TQDM_INT)
-# %%
-def roc_auc_compute_fn(y_targets, y_preds):
-    y_true = y_targets.cpu().numpy()
-    y_pred = y_preds.cpu().numpy()
-    return roc_auc_score(y_true, y_pred)
 
 
 model.eval()
 dataset = Riiid(d=d)
 scores = []
+dataset_val = torch.utils.data.DataLoader(dataset=dataset, 
+                                          batch_size=VAL_BATCH_SIZE, 
+                                          collate_fn=collate_fn, drop_last=True)
+len_dataset = len(dataset_val)
 
-for idx,batch in tqdm(enumerate(torch.utils.data.DataLoader(dataset=dataset, batch_size=32, collate_fn=collate_fn, drop_last=True))):
-    content_id, _, part_id, prior_question_elapsed_time, mask, labels = batch
-    content_id = Variable(content_id.cuda())
-    part_id = Variable(part_id.cuda())
-    prior_question_elapsed_time = Variable(prior_question_elapsed_time.cuda())
-    mask = Variable(mask.cuda())
-    labels = Variable(labels.cuda())
-    with torch.set_grad_enabled(mode=False):
-            output = model(content_id, part_id, prior_question_elapsed_time, mask)
-            output_prob = output[:,:,1]
-            pred = output_prob >= 0.50
-            # print(output.shape, labels.shape) # torch.Size([N, S, 2]) torch.Size([N, S])
-            _, predicted = torch.max(output[:,:,].data, 1)
-            score = roc_auc_compute_fn(labels, pred)
-            scores.append(score)
-print(scores.mean())
+with tqdm(total=len_dataset) as pbar:
+    for idx,batch in enumerate(dataset_val):
+        content_id, _, part_id, prior_question_elapsed_time, mask, labels = batch
+        content_id = Variable(content_id.cuda())
+        part_id = Variable(part_id.cuda())
+        prior_question_elapsed_time = Variable(prior_question_elapsed_time.cuda())
+        mask = Variable(mask.cuda())
+        labels = Variable(labels.cuda())
+        with torch.set_grad_enabled(mode=False):
+                output = model(content_id, part_id, prior_question_elapsed_time, mask)
+
+                # crossEntropy loss
+                output_prob = torch.softmax(output, dim=2)
+                # pred = (output_prob >= 0.50)
+                predicted_classes = torch.argmax(output, dim=2)
+
+                # BCE loss
+                # output_prob = output[:,:,1]
+                # pred = (output_prob >= 0.50)
+                # print(output.shape, labels.shape) # torch.Size([N, S, 2]) torch.Size([N, S])
+                # _, predicted_classes = torch.max(output[:,:,].data, 1)
+
+                score = roc_auc_compute_fn(labels, predicted_classes)
+                scores.append(score)
+        if idx % TQDM_INT == 0:
+            pbar.update(TQDM_INT)
+
+pd.Series(losses).astype(np.float32).plot(kind="line")
+print(f"\n\nThe mean auc score is {np.mean(scores)}")
+
 # %%
