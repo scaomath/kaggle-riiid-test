@@ -1,4 +1,5 @@
 #%%
+import os
 import numpy as np
 import pandas as pd
 import dask.dataframe as dd
@@ -12,6 +13,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
+from torch.utils.data import Dataset, DataLoader
 from torch.autograd import Variable
 from torchsummary import summary
 
@@ -31,15 +33,44 @@ TRAIN_DTYPES = {
     'prior_question_had_explanation': 'boolean'
 }
 DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
+MODEL_DIR = '/home/scao/Documents/kaggle-riiid-test/model/'
+FOLD = 1
 LAST_N = 100 # this parameter denotes how many last seen content_ids I am going to consider <aka the max_seq_len or the window size>.
+TAIL_N = 100 # used for validation set per user_id
 FILLNA_VAL = 100 # fillers for the values (a unique value)
 TQDM_INT = 15 # tqdm update interval
 PAD = 0
 BATCH_SIZE = 128
-VAL_BATCH_SIZE = 512
-NROWS_TRAIN = 40_000_000
-NROWS_VALID = 10_000_000
-EPOCHS = 10
+VAL_BATCH_SIZE = 1024
+DEBUG = False
+NROWS_TRAIN = 5_000_000
+NROWS_VALID = 2_000_000
+EPOCHS = 20
+
+def get_valid(train_df, n_tail=50):
+
+    valid_df = train_df.groupby(['user_id']).tail(n_tail)
+    print("valid:", valid_df.shape, "users:", valid_df['user_id'].nunique())
+    # Train
+    train_df.drop(valid_df.index, inplace = True)
+    print("train:", train_df.shape, "users:", train_df['user_id'].nunique())
+    return train_df, valid_df
+
+
+def preprocess(data_df, question_df, train=True):
+    if train:
+        data_df['prior_question_had_explanation'] = \
+            data_df['prior_question_had_explanation'].astype(np.float16).fillna(-1).astype(np.int8)
+    data_df = data_df[data_df.content_type_id == 0]
+
+    part_ids_map = dict(zip(question_df.question_id, question_df.part))
+    data_df['part_id'] = data_df['content_id'].map(part_ids_map)
+
+    data_df["prior_question_elapsed_time"].fillna(FILLNA_VAL, inplace=True) 
+    # FILLNA_VAL different than all current values
+    data_df["prior_question_elapsed_time"] = data_df["prior_question_elapsed_time"] // 1000
+    return data_df
+
 
 def get_feats_tranformer(data_df):
     '''
@@ -176,67 +207,18 @@ def collate_fn(batch):
     # remember the order
     return content_id, task_id, part_id, prior_question_elapsed_time, padded, labels
 
+def train_epoch(model, train_iterator, optimizer, criterion):
+    model.train()
 
-# %%
-start = time()
-df_train = pd.read_csv(DATA_DIR+'train.csv', 
-                       nrows=NROWS_TRAIN, 
-                       dtype=TRAIN_DTYPES, 
-                       usecols=TRAIN_DTYPES.keys())
-print(f"Readding train.csv in {time()-start} seconds\n\n")
+    train_loss = []
+    num_corrects = 0
+    num_total = 0
+    label_all = []
+    pred_all = []
+    len_dataset = len(train_iterator)
 
-df_questions = pd.read_csv(DATA_DIR+'questions.csv')
-
-start = time()
-df_train['prior_question_had_explanation'] = df_train['prior_question_had_explanation'].astype(np.float16).fillna(-1).astype(np.int8)
-df_train = df_train[df_train.content_type_id == 0]
-
-part_ids_map = dict(zip(df_questions.question_id, df_questions.part))
-df_train['part_id'] = df_train['content_id'].map(part_ids_map)
-
-df_train["prior_question_elapsed_time"].fillna(FILLNA_VAL, inplace=True) # different than all current values
-df_train["prior_question_elapsed_time"] = df_train["prior_question_elapsed_time"] // 1000
-
-
-d, user_id_to_idx = get_feats_tranformer(df_train)
-print(f"Processing train.csv in {time()-start} seconds\n\n")
-print(user_id_to_idx[115], d[0]) # user_id 115; I encourage you to match the same with the dataframes.
-
-
-# %%
-
-dataset = Riiid(d=d)
-# print(dataset[0]) # sample dataset
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print('Using device:', device)
-sample = next(iter(torch.utils.data.DataLoader(dataset=dataset, 
-                batch_size=1, collate_fn=collate_fn, num_workers=8))) # dummy check
-# createing the mdoel
-model = TransformerModel(ninp=LAST_N, nhead=4, nhid=128, nlayers=3, dropout=0.3)
-model = model.to(device)
-# %% training
-losses = []
-history = []
-
-auc_max = -np.inf
-
-
-# criterion = nn.BCEWithLogitsLoss()
-criterion = nn.CrossEntropyLoss()
-lr = 1e-3 # learning rate
-optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-model.train()
-dataset_train = torch.utils.data.DataLoader(dataset=dataset, 
-                                            batch_size=BATCH_SIZE,
-                                            collate_fn=collate_fn, 
-                                            num_workers=8)
-
-len_dataset = len(dataset_train)
-
-
-for epoch in range(1, EPOCHS+1):
     with tqdm(total=len_dataset) as pbar:
-        for idx,batch in enumerate(dataset_train):
+        for idx,batch in enumerate(train_iterator):
             content_id, _, part_id, prior_question_elapsed_time, mask, labels = batch
             content_id = Variable(content_id.cuda())
             part_id = Variable(part_id.cuda())
@@ -244,6 +226,7 @@ for epoch in range(1, EPOCHS+1):
             mask = Variable(mask.cuda())
             labels = Variable(labels.cuda().long())
             optimizer.zero_grad()
+            
             with torch.set_grad_enabled(mode=True):
                 output = model(content_id, part_id, prior_question_elapsed_time, mask)
                 # output is (N,S,2) # i am working on it
@@ -251,63 +234,142 @@ for epoch in range(1, EPOCHS+1):
                 # loss = criterion(output[:,:,1], labels) # BCEWithLogitsLoss
                 loss = criterion(output.reshape(-1, 2), labels.reshape(-1)) # Flatten and use crossEntropy
                 loss.backward()
-                losses.append(loss.cpu().detach().data.numpy())
                 optimizer.step()
+
+                train_loss.append(loss.cpu().detach().data.numpy())
+            pred_probs = torch.softmax(output, dim=2)
+            pred = torch.argmax(pred_probs, dim=2)
+            num_corrects += (pred == labels).sum().item()
+            num_total += len(labels)
+
+            label_all.extend(labels.reshape(-1).data.cpu().numpy())
+            # pred_all.extend(pred.reshape(-1).data.cpu().numpy())
+            pred_all.extend(pred_probs[:,:,1].reshape(-1).data.cpu().numpy()) # use probability to do auc
+
             if idx % TQDM_INT == 0:
                 pbar.update(TQDM_INT)
-# %% The current validation set will have leakage
-df_valid = pd.read_csv(DATA_DIR+"train.csv", nrows=NROWS_VALID, 
-                                             dtype=TRAIN_DTYPES, 
-                                             usecols=TRAIN_DTYPES.keys(), 
-                                             skiprows=range(1, NROWS_TRAIN)
-                      )
-df_valid = df_valid[df_valid.content_type_id == 0]
 
-df_valid["prior_question_elapsed_time"].fillna(FILLNA_VAL, inplace=True)
-df_valid["prior_question_elapsed_time"] = df_valid["prior_question_elapsed_time"] // 1000
+    acc = num_corrects / num_total
+    auc = roc_auc_score(label_all, pred_all)
+    loss = np.mean(train_loss)
 
-part_ids_map = dict(zip(df_questions.question_id, df_questions.part))
-df_valid['part_id'] = df_valid['content_id'].map(part_ids_map)
-d, user_id_to_idx = get_feats_tranformer(df_valid)
-# %%
+    return loss, acc, auc
 
 
-model.eval()
-dataset = Riiid(d=d)
-scores = []
-dataset_val = torch.utils.data.DataLoader(dataset=dataset, 
-                                          batch_size=VAL_BATCH_SIZE, 
-                                          collate_fn=collate_fn, drop_last=True)
-len_dataset = len(dataset_val)
+def valid_epoch(model, valid_iterator, criterion):
+    model.eval()
+    valid_loss = []
+    num_corrects = 0
+    num_total = 0
+    label_all = []
+    pred_all = []
+    len_dataset = len(valid_iterator)
 
-with tqdm(total=len_dataset) as pbar:
-    for idx,batch in enumerate(dataset_val):
-        content_id, _, part_id, prior_question_elapsed_time, mask, labels = batch
-        content_id = Variable(content_id.cuda())
-        part_id = Variable(part_id.cuda())
-        prior_question_elapsed_time = Variable(prior_question_elapsed_time.cuda())
-        mask = Variable(mask.cuda())
-        labels = Variable(labels.cuda())
-        with torch.set_grad_enabled(mode=False):
+    with tqdm(total=len_dataset) as pbar:
+        for idx, batch in enumerate(valid_iterator):
+            content_id, _, part_id, prior_question_elapsed_time, mask, labels = batch
+            content_id = Variable(content_id.cuda())
+            part_id = Variable(part_id.cuda())
+            prior_question_elapsed_time = Variable(prior_question_elapsed_time.cuda())
+            mask = Variable(mask.cuda())
+            labels = Variable(labels.cuda().long())
+            with torch.set_grad_enabled(mode=False):
                 output = model(content_id, part_id, prior_question_elapsed_time, mask)
+                loss = criterion(output.reshape(-1, 2), labels.reshape(-1)) # Flatten and use crossEntropy
+            # crossEntropy loss
+            valid_loss.append(loss.cpu().detach().data.numpy())
+            pred_probs = torch.softmax(output, dim=2)
+            # pred = (output_prob >= 0.50)
+            pred = torch.argmax(pred_probs, dim=2)
+            
+            # BCE loss
+            # output_prob = output[:,:,1]
+            # pred = (output_prob >= 0.50)
+            # print(output.shape, labels.shape) # torch.Size([N, S, 2]) torch.Size([N, S])
+            # _, predicted_classes = torch.max(output[:,:,].data, 1)
 
-                # crossEntropy loss
-                output_prob = torch.softmax(output, dim=2)
-                # pred = (output_prob >= 0.50)
-                predicted_classes = torch.argmax(output, dim=2)
+            num_corrects += (pred == labels).sum().item()
+            num_total += len(labels)
+            label_all.extend(labels.reshape(-1).data.cpu().numpy())
+            # pred_all.extend(pred.reshape(-1).data.cpu().numpy())
+            pred_all.extend(pred_probs[:,:,1].reshape(-1).data.cpu().numpy()) # use probability to do auc
+            
+            if idx % TQDM_INT == 0:
+                pbar.update(TQDM_INT)
 
-                # BCE loss
-                # output_prob = output[:,:,1]
-                # pred = (output_prob >= 0.50)
-                # print(output.shape, labels.shape) # torch.Size([N, S, 2]) torch.Size([N, S])
-                # _, predicted_classes = torch.max(output[:,:,].data, 1)
+    acc = num_corrects / num_total
+    auc = roc_auc_score(label_all, pred_all)
+    loss = np.mean(valid_loss)
 
-                score = roc_auc_compute_fn(labels, predicted_classes)
-                scores.append(score)
-        if idx % TQDM_INT == 0:
-            pbar.update(TQDM_INT)
+    return loss, acc, auc
 
-pd.Series(losses).astype(np.float32).plot(kind="line")
-print(f"\n\nThe mean auc score is {np.mean(scores)}")
 
+# %% Preparing train and validation set
+start = time()
+if DEBUG: 
+    train_df = pd.read_csv(DATA_DIR+'train.csv', 
+                        nrows=NROWS_TRAIN, 
+                        dtype=TRAIN_DTYPES, 
+                        usecols=TRAIN_DTYPES.keys())
+else:
+    train_df = pd.read_csv(DATA_DIR+'train.csv', 
+                    dtype=TRAIN_DTYPES, 
+                    usecols=TRAIN_DTYPES.keys())
+print(f"Readding train.csv in {time()-start} seconds\n\n")
+df_questions = pd.read_csv(DATA_DIR+'questions.csv')
+
+train_df, valid_df = get_valid(train_df, n_tail=TAIL_N)
+train_df = preprocess(train_df, df_questions, train=True)
+valid_df = preprocess(valid_df, df_questions, train=False)
+d, user_id_to_idx = get_feats_tranformer(train_df)
+d_val, user_id_to_idx = get_feats_tranformer(valid_df)
+print(f"\nProcessing train and valid in {time()-start} seconds\n\n")
+print(user_id_to_idx[115], d[0]) # user_id 115; I encourage you to match the same with the dataframes.
+
+
+# %%
+dataset_train = Riiid(d=d)
+dataset_val = Riiid(d=d_val)
+# print(dataset[0]) # sample dataset
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print('Using device:', device)
+sample = next(iter(DataLoader(dataset=dataset_train, 
+                batch_size=1, collate_fn=collate_fn))) # dummy check
+# createing the mdoel
+model = TransformerModel(ninp=LAST_N, nhead=4, nhid=128, nlayers=3, dropout=0.3)
+model = model.to(device)
+# %% training and validation
+losses = []
+history = []
+auc_max = -np.inf
+
+# criterion = nn.BCEWithLogitsLoss()
+criterion = nn.CrossEntropyLoss()
+lr = 1e-3 
+optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+
+dataset_train = DataLoader(dataset=dataset_train, batch_size=BATCH_SIZE, collate_fn=collate_fn)
+
+dataset_val = DataLoader(dataset=dataset_val, batch_size=VAL_BATCH_SIZE, collate_fn=collate_fn, drop_last=True)
+
+snapshot_path = "%s/fold%d/snapshots" % (MODEL_DIR, FOLD)
+if not os.path.exists(snapshot_path):
+    os.makedirs(snapshot_path)
+
+for epoch in range(1, EPOCHS+1):
+    train_loss, train_acc, train_auc = train_epoch(model, dataset_train, optimizer, criterion)
+    print(f"\n\nEpoch {epoch}/{EPOCHS}")
+    print(f"Train: loss - {train_loss:.2f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
+    valid_loss, valid_acc, valid_auc = valid_epoch(model, dataset_val, criterion)
+    print(f"\nValid: loss - {valid_loss:.2f} acc - {valid_acc:.4f} auc - {valid_auc:.4f}")
+    lr = optimizer.param_groups[0]['lr']
+    history.append({"epoch":epoch, "lr": lr, 
+                    **{"train_auc": train_auc, "train_acc": train_acc}, 
+                    **{"valid_auc": valid_auc, "valid_acc": valid_acc}})
+    if valid_auc > auc_max:
+        print(f"Epoch #{epoch}, valid loss {valid_loss:.4f}")
+        print(f"Metric loss improved from {auc_max:.4f} to {valid_auc:.4f}, saving model ...")
+        auc_max = valid_auc
+        torch.save(model.state_dict(), os.path.join(snapshot_path, "model_best_epoch.pt"))
+# %%
 # %%
