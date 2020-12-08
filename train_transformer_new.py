@@ -65,10 +65,9 @@ NROWS_TRAIN = 5_000_000
 NROWS_VALID = 2_000_000
 NROWS_TEST = 60
 
-EPOCHS = 20
-
-DEBUG = True
-TRAIN = False
+EPOCHS = 40
+TRAIN = True
+DEBUG = False
 
 
 def roc_auc_compute_fn(y_targets, y_preds):

@@ -2,6 +2,9 @@ import os
 import random
 import numpy as np
 import torch
+from sklearn.metrics import roc_auc_score
+
+
 
 def get_seed(s):
     random.seed(s)
@@ -17,3 +20,9 @@ def get_seed(s):
 
 SEED = 1127 
 get_seed(SEED)
+
+
+def roc_auc_compute_fn(y_targets, y_preds):
+    y_true = y_targets.cpu().numpy()
+    y_pred = y_preds.cpu().numpy()
+    return roc_auc_score(y_true, y_pred)
