@@ -47,6 +47,14 @@ NROWS_TRAIN = 5_000_000
 NROWS_VALID = 2_000_000
 EPOCHS = 20
 
+
+
+def roc_auc_compute_fn(y_targets, y_preds):
+    y_true = y_targets.cpu().numpy()
+    y_pred = y_preds.cpu().numpy()
+    return roc_auc_score(y_true, y_pred)
+
+
 def get_valid(train_df, n_tail=50):
 
     valid_df = train_df.groupby(['user_id']).tail(n_tail)
@@ -72,7 +80,7 @@ def preprocess(data_df, question_df, train=True):
     return data_df
 
 
-def get_feats_tranformer(data_df):
+def get_feats(data_df):
     '''
     Using a deque as it automatically limits the max_size as per the Data Strucutre's defination itself
     so we don't need to manage that...
@@ -119,11 +127,50 @@ def get_feats_tranformer(data_df):
         # if in future a new user comes, we will just increase the counts as of now... <WIP>
     return df, user_id_to_idx
 
+def get_feats_test(data_df):
+    '''
+    Using a deque as it automatically limits the max_size as per the Data Strucutre's defination itself
+    so we don't need to manage that...
+    '''
+    df = {}
+    user_id_to_idx = {}
+    grp = data_df.groupby("user_id").tail(LAST_N) # Select last_n rows of each user.
+    grp_user = grp.groupby("user_id")
+    num_user_id_grp = len(grp_user)
 
-def roc_auc_compute_fn(y_targets, y_preds):
-    y_true = y_targets.cpu().numpy()
-    y_pred = y_preds.cpu().numpy()
-    return roc_auc_score(y_true, y_pred)
+    with tqdm(total=num_user_id_grp) as pbar:
+        for idx, row in grp_user.agg({
+            "content_id":list, "task_container_id":list, 
+            "part_id":list, "prior_question_elapsed_time":list
+            }).reset_index().iterrows():
+            # here we make a split whether a user has more than equal to 100 entries or less than that
+            # if it's less than LAST_N, then we need to PAD it using the PAD token defined as 0 by me in this cell block
+            # also, padded will be True where we have done padding obviously, rest places it's False.
+            if len(row["content_id"]) >= 100:
+                df[idx] = {
+                    "user_id": row["user_id"],
+                    "content_id" : deque(row["content_id"], maxlen=LAST_N),
+                    "task_container_id" : deque(row["task_container_id"], maxlen=LAST_N),
+                    "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"], maxlen=LAST_N),
+                    "part_id": deque(row["part_id"], maxlen=LAST_N),
+                    "padded" : deque([False]*100, maxlen=LAST_N)
+                }
+            else:
+                # we have to pad...
+                # (max_batch_len - len(seq))
+                df[idx] = {
+                    "user_id": row["user_id"],
+                    "content_id" : deque(row["content_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
+                    "task_container_id" : deque(row["task_container_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
+                    "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
+                    "part_id": deque(row["part_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
+                    "padded" : deque([False]*len(row["content_id"]) + [True]*(100-len(row["content_id"])), maxlen=LAST_N)
+                }
+            user_id_to_idx[row["user_id"]] = idx
+            if idx % TQDM_INT == 0:
+                pbar.update(TQDM_INT)
+        # if in future a new user comes, we will just increase the counts as of now... <WIP>
+    return df, user_id_to_idx
 
 # %%
 class TransformerModel(nn.Module):
@@ -321,8 +368,8 @@ df_questions = pd.read_csv(DATA_DIR+'questions.csv')
 train_df, valid_df = get_valid(train_df, n_tail=TAIL_N)
 train_df = preprocess(train_df, df_questions, train=True)
 valid_df = preprocess(valid_df, df_questions, train=False)
-d, user_id_to_idx = get_feats_tranformer(train_df)
-d_val, user_id_to_idx = get_feats_tranformer(valid_df)
+d, user_id_to_idx = get_feats(train_df)
+d_val, user_id_to_idx = get_feats(valid_df)
 print(f"\nProcessing train and valid in {time()-start} seconds\n\n")
 print(user_id_to_idx[115], d[0]) # user_id 115; I encourage you to match the same with the dataframes.
 
@@ -358,7 +405,7 @@ if not os.path.exists(snapshot_path):
 
 for epoch in range(1, EPOCHS+1):
     train_loss, train_acc, train_auc = train_epoch(model, dataset_train, optimizer, criterion)
-    print(f"\n\nEpoch {epoch}/{EPOCHS}")
+    print(f"\n\n[Epoch {epoch}/{EPOCHS}]")
     print(f"Train: loss - {train_loss:.2f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
     valid_loss, valid_acc, valid_auc = valid_epoch(model, dataset_val, criterion)
     print(f"\nValid: loss - {valid_loss:.2f} acc - {valid_acc:.4f} auc - {valid_auc:.4f}")
@@ -367,9 +414,8 @@ for epoch in range(1, EPOCHS+1):
                     **{"train_auc": train_auc, "train_acc": train_acc}, 
                     **{"valid_auc": valid_auc, "valid_acc": valid_acc}})
     if valid_auc > auc_max:
-        print(f"Epoch #{epoch}, valid loss {valid_loss:.4f}")
+        print(f"[Epoch {epoch}/{EPOCHS}], valid loss {valid_loss:.4f}")
         print(f"Metric loss improved from {auc_max:.4f} to {valid_auc:.4f}, saving model ...")
         auc_max = valid_auc
         torch.save(model.state_dict(), os.path.join(snapshot_path, "model_best_epoch.pt"))
-# %%
 # %%
