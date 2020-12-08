@@ -67,7 +67,8 @@ NROWS_TEST = 60
 
 EPOCHS = 20
 
-TRAIN = True
+DEBUG = True
+TRAIN = False
 
 
 def roc_auc_compute_fn(y_targets, y_preds):
