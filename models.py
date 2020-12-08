@@ -13,6 +13,10 @@ FILLNA_VAL = 100
 LAST_N = 100
 TQDM_INT = 8
 PAD = 0
+FOLD = 1
+MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/fold{FOLD}/snapshots/'
+N_EXERCISES = 13523 #  train_df['content_id'].unique()
+
 
 class TransformerModel(nn.Module):
 
@@ -26,7 +30,7 @@ class TransformerModel(nn.Module):
         self.src_mask = None
         encoder_layers = TransformerEncoderLayer(d_model=ninp, nhead=nhead, dim_feedforward=nhid, dropout=dropout, activation='relu')
         self.transformer_encoder = TransformerEncoder(encoder_layer=encoder_layers, num_layers=nlayers)
-        self.exercise_embeddings = nn.Embedding(num_embeddings=13523, embedding_dim=ninp) # exercise_id
+        self.exercise_embeddings = nn.Embedding(num_embeddings=N_EXERCISES, embedding_dim=ninp) # exercise_id
         self.pos_embedding = nn.Embedding(ninp, ninp) # positional embeddings
         self.part_embeddings = nn.Embedding(num_embeddings=7+1, embedding_dim=ninp) # part_id_embeddings
         self.prior_question_elapsed_time = nn.Embedding(num_embeddings=301, embedding_dim=ninp) # prior_question_elapsed_time
@@ -167,3 +171,13 @@ def valid_epoch(model, valid_iterator, criterion):
     loss = np.mean(valid_loss)
 
     return loss, acc, auc
+
+
+if __name__ == "__main__":
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = TransformerModel(ninp=LAST_N, nhead=4, nhid=128, nlayers=3, dropout=0.3)
+    model = model.to(device)
+    print("Loading state_dict...")
+    model.load_state_dict(torch.load(MODEL_DIR+'model_best_epoch.pt', map_location=device))
+    model.eval()
+    print(model)

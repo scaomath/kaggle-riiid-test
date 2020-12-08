@@ -60,8 +60,8 @@ TAIL_N = 100 # used for validation set per user_id
 FILLNA_VAL = 100 # fillers for the values (a unique value)
 TQDM_INT = 15 # tqdm update interval
 PAD = 0
-BATCH_SIZE = 128
-VAL_BATCH_SIZE = 1024
+BATCH_SIZE = 512
+VAL_BATCH_SIZE = 2048
 
 NROWS_TRAIN = 5_000_000
 NROWS_VALID = 2_000_000
@@ -140,8 +140,8 @@ if TRAIN:
                         **{"train_auc": train_auc, "train_acc": train_acc}, 
                         **{"valid_auc": valid_auc, "valid_acc": valid_acc}})
         if valid_auc > auc_max:
-            print(f"[Epoch {epoch}/{EPOCHS}], valid loss {valid_loss:.4f}")
-            print(f"Metric loss improved from {auc_max:.4f} to {valid_auc:.4f}, saving model ...")
+            print(f"[Epoch {epoch}/{EPOCHS}] auc improved from {auc_max:.4f} to {valid_auc:.4f}") 
+            print("saving model ...")
             auc_max = valid_auc
             torch.save(model.state_dict(), os.path.join(snapshot_path, "model_best_epoch.pt"))
 else:
