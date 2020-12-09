@@ -31,7 +31,7 @@ To-do:
 
 Version notes:
 - Ver 1: val auc 0.7598, n_head = 4, n_hidden = 128, n_layers = 3
-- Ver 2: val auc 0.7579, n_head = 10, n_hidden = 256, n_layers = 4
+- Ver 2: val auc 0.7610, n_head = 10, n_hidden = 256, n_layers = 4
 '''
 TRAIN_DTYPES = {
     # 'row_id': np.uint32,
@@ -61,14 +61,16 @@ TEST_DTYPES = {
 DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
 FOLD = 1
 MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
+
+NUM_HEAD = 10 # number of attentions
 LAST_N = 100 
 # this parameter denotes how many last seen content_ids I am going to consider <aka the max_seq_len or the window size>.
 TAIL_N = 100 # used for validation set per user_id
 FILLNA_VAL = 100 # fillers for the values (a unique value)
 TQDM_INT = 15 # tqdm update interval
 PAD = 0
-BATCH_SIZE = 256
-VAL_BATCH_SIZE = 2048
+BATCH_SIZE = 128
+VAL_BATCH_SIZE = 4096
 
 NROWS_TRAIN = 5_000_000
 NROWS_VALID = 2_000_000
@@ -132,7 +134,7 @@ sample = next(iter(DataLoader(dataset=dataset_train,
                 batch_size=1, collate_fn=collate_fn))) # dummy check
 # createing the mdoel
 # LAST_N is the embedded dimension number of heads must divide it
-model = TransformerModel(ninp=LAST_N, nhead=10, nhid=256, nlayers=4, dropout=0.3)
+model = TransformerModel(ninp=LAST_N, nhead=NUM_HEAD, nhid=256, nlayers=4, dropout=0.3)
 model = model.to(device)
 
 losses = []
@@ -144,9 +146,15 @@ criterion = nn.CrossEntropyLoss()
 lr = 1e-3 
 optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-dataset_train = DataLoader(dataset=dataset_train, batch_size=BATCH_SIZE, collate_fn=collate_fn)
+train_loader = DataLoader(dataset=dataset_train, 
+                          shuffle=True,
+                          batch_size=BATCH_SIZE, 
+                          collate_fn=collate_fn)
 
-dataset_val = DataLoader(dataset=dataset_val, batch_size=VAL_BATCH_SIZE, collate_fn=collate_fn, drop_last=True)
+val_loader = DataLoader(dataset=dataset_val, 
+                        batch_size=VAL_BATCH_SIZE, 
+                        collate_fn=collate_fn, 
+                        drop_last=True)
 
 # snapshot_path = "%s/fold%d/snapshots" % (MODEL_DIR, FOLD)
 # if not os.path.exists(snapshot_path):
@@ -159,10 +167,10 @@ print(f"# of params in model: {num_params}")
 if TRAIN:
     print("\n\nTraining...:")
     for epoch in range(1, EPOCHS+1):
-        train_loss, train_acc, train_auc = train_epoch(model, dataset_train, optimizer, criterion)
+        train_loss, train_acc, train_auc = train_epoch(model, train_loader, optimizer, criterion)
         print(f"\n\n[Epoch {epoch}/{EPOCHS}]")
         print(f"Train: loss - {train_loss:.2f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
-        valid_loss, valid_acc, valid_auc = valid_epoch(model, dataset_val, criterion)
+        valid_loss, valid_acc, valid_auc = valid_epoch(model, val_loader, criterion)
         print(f"\nValid: loss - {valid_loss:.2f} acc - {valid_acc:.4f} auc - {valid_auc:.4f}")
         lr = optimizer.param_groups[0]['lr']
         history.append({"epoch":epoch, "lr": lr, 
@@ -173,10 +181,19 @@ if TRAIN:
             print(f"[Epoch {epoch}/{EPOCHS}] auc improved from {auc_max:.4f} to {valid_auc:.4f}") 
             print("saving model ...")
             auc_max = valid_auc
-            torch.save(model.state_dict(), os.path.join(MODEL_DIR, f"model_fold{FOLD}_auc_{valid_auc:.4f}.pt"))
+            torch.save(model.state_dict(), 
+            os.path.join(MODEL_DIR, f"model_head_{NUM_HEAD}_fold{FOLD}_auc_{valid_auc:.4f}.pt"))
         
         with open(DATA_DIR+f'history_auc_{valid_auc:.4f}.pickle', 'wb') as handle:
             pickle.dump(history, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+        if epoch % 10 == 0:
+            BATCH_SIZE *= 2
+            train_loader = DataLoader(dataset=dataset_train, 
+                                      shuffle=True, 
+                                      batch_size=BATCH_SIZE, 
+                                      collate_fn=collate_fn)
+
 else:
     tqdm.write("\nLoading state_dict...\n")
     model_files = find_files('model', MODEL_DIR)
@@ -184,6 +201,8 @@ else:
     model.eval()
     valid_loss, valid_acc, valid_auc = valid_epoch(model, dataset_val, criterion)
     print(f"\nValid: loss - {valid_loss:.2f} acc - {valid_acc:.4f} auc - {valid_auc:.4f}")
+
+
 
 # %%
 if TEST:
