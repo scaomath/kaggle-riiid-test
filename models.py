@@ -20,7 +20,7 @@ N_EXERCISES = 13523 #  train_df['content_id'].unique()
 
 class TransformerModel(nn.Module):
 
-    def __init__(self, ninp:int=32, nhead:int=2, nhid:int=64, nlayers:int=2, dropout:float=0.3):
+    def __init__(self, ninp:int=32, nhead:int=4, nhid:int=64, nlayers:int=2, dropout:float=0.3):
         '''
         nhead -> number of heads in the transformer multi attention thing.
         nhid -> the number of hidden dimension neurons in the model.

@@ -24,6 +24,7 @@ PAD = 0
 
 class Riiid(Dataset):
     def __init__(self, d):
+        super(Riiid, self).__init__()
         self.d = d
     
     def __len__(self):
@@ -40,6 +41,7 @@ class Riiid(Dataset):
 class RiiidTest(Dataset):
     
     def __init__(self, d):
+        super(RiiidTest, self).__init__()
         self.d = d
     
     def __len__(self):

@@ -38,12 +38,18 @@ def roc_auc_compute_fn(y_targets, y_preds):
     y_pred = y_preds.cpu().numpy()
     return roc_auc_score(y_true, y_pred)
 
-def find_all(name, path):
+def find_files(name, path):
     result = []
     for root, dirs, files in os.walk(path):
-        if name in files:
-            result.append(os.path.join(root, name))
+        for _file in files:
+            if name in _file:
+                result.append(os.path.join(root, _file))
     return result
+
+def get_num_params(model):
+    model_parameters = filter(lambda p: p.requires_grad, model.parameters())
+    params = sum([np.prod(p.size()) for p in model_parameters])
+    return params
 
 def reduce_mem_usage(df, verbose=True):
     numerics = ['int16', 'int32', 'int64', 'float16', 'float32', 'float64']

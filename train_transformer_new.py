@@ -28,6 +28,10 @@ from models import *
 To-do:
 - Fix the same user_id prediction problem
 - Check how the predicted probability relates to the original target in val set
+
+Version notes:
+- Ver 1: val auc 0.7598, n_head = 4, n_hidden = 128, n_layers = 3
+- Ver 2: val auc 0.7579, n_head = 10, n_hidden = 256, n_layers = 4
 '''
 TRAIN_DTYPES = {
     # 'row_id': np.uint32,
@@ -57,12 +61,13 @@ TEST_DTYPES = {
 DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
 FOLD = 1
 MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
-LAST_N = 100 # this parameter denotes how many last seen content_ids I am going to consider <aka the max_seq_len or the window size>.
+LAST_N = 100 
+# this parameter denotes how many last seen content_ids I am going to consider <aka the max_seq_len or the window size>.
 TAIL_N = 100 # used for validation set per user_id
 FILLNA_VAL = 100 # fillers for the values (a unique value)
 TQDM_INT = 15 # tqdm update interval
 PAD = 0
-BATCH_SIZE = 512
+BATCH_SIZE = 256
 VAL_BATCH_SIZE = 2048
 
 NROWS_TRAIN = 5_000_000
@@ -72,14 +77,16 @@ NROWS_TEST = 60
 EPOCHS = 40
 
 DEBUG = False
-TRAIN = False
+TRAIN = True
 PREPROCESS = False
+TEST = False
 
 
 # %% Preparing train and validation set
 df_questions = pd.read_csv(DATA_DIR+'questions.csv')
 start = time()
 if PREPROCESS:
+    print(f"\nProcessing train and valid...")
     if DEBUG: 
         train_df = pd.read_csv(DATA_DIR+'train.csv', 
                             nrows=NROWS_TRAIN, 
@@ -94,7 +101,7 @@ if PREPROCESS:
     valid_df = preprocess(valid_df, df_questions, train=False)
     d, user_id_to_idx = get_feats(train_df)
     d_val, user_id_to_idx = get_feats(valid_df)
-    print(f"\nProcessing train and valid in {time()-start} seconds\n\n")
+    print(f"\nProcessed train and valid in {time()-start} seconds\n\n")
     skills = train_df['content_id'].unique()
     n_skill = 13523 # len(skills)
     print("Number of skills", n_skill, '\n\n')
@@ -106,15 +113,12 @@ if PREPROCESS:
         pickle.dump(d_val, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 else: # to-do: save variable 
+    print(f"\nLoading train and valid...")
     with open(DATA_DIR+'d_train.pickle', 'rb') as handle:
         d = pickle.load(handle)
     with open(DATA_DIR+'d_val.pickle', 'rb') as handle:
         d_val = pickle.load(handle)
-
-
-print(f"Readding train and validation data in {time()-start} seconds\n\n")
-
-
+    print(f"Loaded train and validation data in {time()-start} seconds\n\n")
 
 
 
@@ -123,11 +127,12 @@ dataset_train = Riiid(d=d)
 dataset_val = Riiid(d=d_val)
 # print(dataset[0]) # sample dataset
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print('Using device:', device)
+
 sample = next(iter(DataLoader(dataset=dataset_train, 
                 batch_size=1, collate_fn=collate_fn))) # dummy check
 # createing the mdoel
-model = TransformerModel(ninp=LAST_N, nhead=4, nhid=128, nlayers=3, dropout=0.3)
+# LAST_N is the embedded dimension number of heads must divide it
+model = TransformerModel(ninp=LAST_N, nhead=10, nhid=256, nlayers=4, dropout=0.3)
 model = model.to(device)
 
 losses = []
@@ -143,10 +148,12 @@ dataset_train = DataLoader(dataset=dataset_train, batch_size=BATCH_SIZE, collate
 
 dataset_val = DataLoader(dataset=dataset_val, batch_size=VAL_BATCH_SIZE, collate_fn=collate_fn, drop_last=True)
 
-snapshot_path = "%s/fold%d/snapshots" % (MODEL_DIR, FOLD)
-if not os.path.exists(snapshot_path):
-    os.makedirs(snapshot_path)
-
+# snapshot_path = "%s/fold%d/snapshots" % (MODEL_DIR, FOLD)
+# if not os.path.exists(snapshot_path):
+#     os.makedirs(snapshot_path)
+num_params = get_num_params(model)
+print(f'Using device:         {device}')
+print(f"# of params in model: {num_params}")
 
 #%%
 if TRAIN:
@@ -161,29 +168,35 @@ if TRAIN:
         history.append({"epoch":epoch, "lr": lr, 
                         **{"train_auc": train_auc, "train_acc": train_acc}, 
                         **{"valid_auc": valid_auc, "valid_acc": valid_acc}})
+        
         if valid_auc > auc_max:
             print(f"[Epoch {epoch}/{EPOCHS}] auc improved from {auc_max:.4f} to {valid_auc:.4f}") 
             print("saving model ...")
             auc_max = valid_auc
-            torch.save(model.state_dict(), os.path.join(snapshot_path, f"model_CV_auc_{valid_auc:.4f}.pt"))
+            torch.save(model.state_dict(), os.path.join(MODEL_DIR, f"model_fold{FOLD}_auc_{valid_auc:.4f}.pt"))
+        
+        with open(DATA_DIR+f'history_auc_{valid_auc:.4f}.pickle', 'wb') as handle:
+            pickle.dump(history, handle, protocol=pickle.HIGHEST_PROTOCOL)
 else:
-    print("Loading state_dict...")
-    model.load_state_dict(torch.load(os.path.join(snapshot_path, "model_best_epoch.pt"), map_location=device))
+    tqdm.write("\nLoading state_dict...\n")
+    model_files = find_files('model', MODEL_DIR)
+    model.load_state_dict(torch.load(model_files[-1], map_location=device))
     model.eval()
     valid_loss, valid_acc, valid_auc = valid_epoch(model, dataset_val, criterion)
     print(f"\nValid: loss - {valid_loss:.2f} acc - {valid_acc:.4f} auc - {valid_auc:.4f}")
 
 # %%
-if not TRAIN and DEBUG:
-    test_df = pd.read_csv(DATA_DIR+'train.csv', 
-                        nrows=NROWS_TEST, 
-                        dtype=TRAIN_DTYPES, 
-                        usecols=TRAIN_DTYPES.keys())
-
-    # test_df = pd.read_csv(DATA_DIR+'example_test.csv', 
-    #                     nrows=NROWS_TEST, 
-    #                     dtype=TEST_DTYPES, 
-    #                     usecols=TEST_DTYPES.keys())
+if TEST:
+    if DEBUG:
+        test_df = pd.read_csv(DATA_DIR+'train.csv', 
+                            nrows=NROWS_TEST, 
+                            dtype=TRAIN_DTYPES, 
+                            usecols=TRAIN_DTYPES.keys())
+    else:
+        test_df = pd.read_csv(DATA_DIR+'example_test.csv', 
+                            nrows=NROWS_TEST, 
+                            dtype=TEST_DTYPES, 
+                            usecols=TEST_DTYPES.keys())
 
     test_df = preprocess(test_df, df_questions, train=False)
     d_test = {}
@@ -247,4 +260,5 @@ if not TRAIN and DEBUG:
         pred = torch.argmax(pred_probs, dim=1)
         output_all.extend(pred_probs[:,1].reshape(-1).data.cpu().numpy())
     test_df['answered_correctly'] = output_all
+
 # %%
