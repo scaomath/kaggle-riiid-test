@@ -115,6 +115,7 @@ def train_epoch(model, train_iterator, optimizer, criterion):
             pred_all.extend(pred_probs[:,1].reshape(-1).data.cpu().numpy()) # use probability to do auc
 
             if idx % TQDM_INT == 0:
+                pbar.set_description(f'loss - {train_loss[-1]:.4f}')
                 pbar.update(TQDM_INT)
 
     acc = num_corrects / num_total

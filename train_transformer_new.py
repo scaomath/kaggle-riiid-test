@@ -78,7 +78,7 @@ NROWS_TEST = 60
 
 EPOCHS = 40
 
-DEBUG = False
+DEBUG = True
 TRAIN = True
 PREPROCESS = False
 TEST = False
@@ -134,7 +134,7 @@ sample = next(iter(DataLoader(dataset=dataset_train,
                 batch_size=1, collate_fn=collate_fn))) # dummy check
 # createing the mdoel
 # LAST_N is the embedded dimension number of heads must divide it
-model = TransformerModel(ninp=LAST_N, nhead=NUM_HEAD, nhid=256, nlayers=4, dropout=0.3)
+model = TransformerModel(ninp=LAST_N, nhead=NUM_HEAD, nhid=128, nlayers=4, dropout=0.3)
 model = model.to(device)
 
 losses = []
@@ -199,7 +199,7 @@ else:
     model_files = find_files('model', MODEL_DIR)
     model.load_state_dict(torch.load(model_files[-1], map_location=device))
     model.eval()
-    valid_loss, valid_acc, valid_auc = valid_epoch(model, dataset_val, criterion)
+    valid_loss, valid_acc, valid_auc = valid_epoch(model, val_loader, criterion)
     print(f"\nValid: loss - {valid_loss:.2f} acc - {valid_acc:.4f} auc - {valid_auc:.4f}")
 
 

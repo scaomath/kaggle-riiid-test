@@ -1,4 +1,6 @@
 #%% 
+from train_transformer_new import TRAIN_DTYPES
+from dataset import TQDM_INT
 import gc, sys, os
 from tqdm.notebook import tqdm
 
@@ -46,13 +48,34 @@ torch.sigmoid added/fixed to train loop
 Training plot
 Train/Valid simple split to save best model
 '''
+
+
+TRAIN_DTYPES = {TIMESTAMP: 'int64', 
+         USER_ID: 'int32', 
+         CONTENT_ID: 'int16',
+         CONTENT_TYPE_ID: 'bool',
+         TARGET:'int8'}
+TEST_DTYPES = {
+    # 'row_id': np.uint32,
+    'timestamp': np.int64,
+    'user_id': np.int32,
+    'content_id': np.int16,
+    'content_type_id': np.int8,
+    'task_container_id': np.int16,
+    'prior_question_elapsed_time': np.float32,
+    'prior_question_had_explanation': 'boolean'
+}
+
+TQDM_INT = 4
 HOME =  "/home/scao/Documents/kaggle-riiid-test"
-DATA_HOME = HOME+'/data/'
-MODEL_NAME = "SAKT-v1"
-MODEL_PATH = HOME + MODEL_NAME
+MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
+DATA_DIR = HOME+'/data/'
+MODEL_NAME = "SAKT"
+MODEL_PATH = HOME + 'model'
 STAGE = "stage1"
-MODEL_BEST = 'model_best.pt'
+MODEL_BEST = f'model_sakt.pt'
 FOLD = 1
+NUM_HEAD = 8
 
 if not os.path.exists(MODEL_PATH):
     os.makedirs(MODEL_PATH)
@@ -64,15 +87,10 @@ USER_ID = "user_id"
 TASK_CONTAINER_ID = "task_container_id"
 TIMESTAMP = "timestamp" 
 # %%
-dtype = {TIMESTAMP: 'int64', 
-         USER_ID: 'int32', 
-         CONTENT_ID: 'int16',
-         CONTENT_TYPE_ID: 'bool',
-         TARGET:'int8'}
-train_df = pd.read_csv(DATA_HOME + 'train.csv', usecols=[1, 2, 3, 4, 7], dtype=dtype)
+
+train_df = pd.read_csv(DATA_DIR + 'train.csv', usecols=[1, 2, 3, 4, 7], dtype=TRAIN_DTYPES)
 train_df = train_df[train_df[CONTENT_TYPE_ID] == False].reset_index(drop = True)
 print(len(train_df))
-# %%
 # Valid with last 100 interactions (must be improved to balance new users and be around 2.5M rows only)
 # However, valid_df includes all users' history needed for testing.
 valid_df = train_df.groupby([USER_ID]).tail(100)
@@ -80,10 +98,9 @@ print("valid:", valid_df.shape, "users:", valid_df[USER_ID].nunique())
 # Train
 train_df.drop(valid_df.index, inplace = True)
 print("train:", train_df.shape, "users:", train_df[USER_ID].nunique())
-# %%
-print(train_df[train_df[USER_ID] == 2147482216].head(10))
-print(valid_df[valid_df[USER_ID] == 115].head(10))
-# %% preprocess
+# print(train_df[train_df[USER_ID] == 2147482216].head(10))
+# print(valid_df[valid_df[USER_ID] == 115].head(10))
+
 skills = train_df[CONTENT_ID].unique()
 n_skill = 13523 # len(skills)
 print("Number of skills", n_skill)
@@ -179,9 +196,9 @@ class SAKTModel(nn.Module):
         self.pos_embedding = nn.Embedding(max_seq-1, embed_dim)
         self.e_embedding = nn.Embedding(n_skill+1, embed_dim)
 
-        self.multi_att = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=8, dropout=0.2)
+        self.multi_att = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=NUM_HEAD, dropout=0.3)
 
-        self.dropout = nn.Dropout(0.2)
+        self.dropout = nn.Dropout(0.3)
         self.layer_normal = nn.LayerNorm(embed_dim) 
 
         self.ffn = FFN(embed_dim)
@@ -219,31 +236,36 @@ def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
     labels = []
     outs = []
 
-    # tbar = tqdm(train_iterator)
-    for item in train_iterator: #tbar:
-        x = item[0].to(device).long()
-        target_id = item[1].to(device).long()
-        label = item[2].to(device).float()
+    
+    len_dataset = len(train_iterator)
 
-        optim.zero_grad()
-        output, atten_weight = model(x, target_id)
-        loss = criterion(output, label)
-        loss.backward()
-        optim.step()
-        train_loss.append(loss.item())
+    with tqdm(total=len_dataset) as pbar:
+        for idx, item in enumerate(train_iterator): 
+            x = item[0].to(device).long()
+            target_id = item[1].to(device).long()
+            label = item[2].to(device).float()
 
-        output = output[:, -1]
-        label = label[:, -1] 
-        pred = (torch.sigmoid(output) >= 0.5).long()
-        
-        num_corrects += (pred == label).sum().item()
-        num_total += len(label)
+            optim.zero_grad()
+            output, atten_weight = model(x, target_id)
+            loss = criterion(output, label)
+            loss.backward()
+            optim.step()
+            train_loss.append(loss.item())
 
-        labels.extend(label.view(-1).data.cpu().numpy())
-        #outs.extend(output.view(-1).data.cpu().numpy())
-        outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
+            output = output[:, -1]
+            label = label[:, -1] 
+            pred = (torch.sigmoid(output) >= 0.5).long()
+            
+            num_corrects += (pred == label).sum().item()
+            num_total += len(label)
 
-        # tbar.set_description('loss - {:.4f}'.format(loss))
+            labels.extend(label.view(-1).data.cpu().numpy())
+            #outs.extend(output.view(-1).data.cpu().numpy())
+            outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
+
+            if idx % TQDM_INT == 0:
+                pbar.set_description(f'loss - {train_loss[-1]:.4f}')
+                pbar.update(TQDM_INT)
     
     acc = num_corrects / num_total
     auc = roc_auc_score(labels, outs)
@@ -260,8 +282,7 @@ def valid_epoch(model, valid_iterator, criterion, device="cuda"):
     labels = []
     outs = []
 
-    #tbar = tqdm(valid_iterator)
-    for item in valid_iterator: # tbar:
+    for item in valid_iterator: 
         x = item[0].to(device).long()
         target_id = item[1].to(device).long()
         label = item[2].to(device).float()
@@ -321,46 +342,55 @@ optimizer = torch.optim.Adam(model.parameters(), lr=conf.lr)
 criterion = nn.BCEWithLogitsLoss()
 
 model.to(device)
-criterion.to(device)
+criterion.to(device);
+num_params = get_num_params(model)
+print("Stage:", STAGE, "fold:", FOLD, "on:", DEVICE, "workers:", conf.WORKERS, "batch size:", conf.BATCH_SIZE, "metric_:", conf.METRIC_) 
+print(f"# of params in model: {num_params}")
+print( "train dataset:", len(train_dataset), "valid dataset:", len(valid_dataset))
 # %%
-epochs = 48
+epochs = 60
 auc_max = -np.inf
 history = []
 
-snapshot_path = "%s/fold%d/%s/snapshots" % (MODEL_PATH, FOLD, STAGE)
-if not os.path.exists(snapshot_path):
-    os.makedirs(snapshot_path)
-
-print("Stage:", STAGE, "fold:", FOLD, "on:", DEVICE, "workers:", conf.WORKERS, "batch size:", conf.BATCH_SIZE, "metric_:", conf.METRIC_, 
-      "train dataset:", len(train_dataset), "valid dataset:", len(valid_dataset))
-
 for epoch in range(1, epochs+1):
     train_loss, train_acc, train_auc = train_epoch(model, train_dataloader, optimizer, criterion, device)
-    print("\nEpoch#{}, train_loss - {:.2f} acc - {:.4f} auc - {:.4f}".format(epoch, train_loss, train_acc, train_auc))
+    print(f"\nEpoch #{epoch}, train_loss - {train_loss:.2f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
     valid_loss, valid_acc, valid_auc = valid_epoch(model, valid_dataloader, criterion, device)
-    print("Epoch#{}, valid_loss - {:.2f} acc - {:.4f} auc - {:.4f}".format(epoch, valid_loss, valid_acc, valid_auc))
+    print(f"Epoch #{epoch}, valid_loss - {valid_loss:.2f} acc - {valid_acc:.4f} auc - {valid_auc:.4f}")
     lr = optimizer.param_groups[0]['lr']
-    history.append({"epoch":epoch, "lr": lr, **{"train_auc": train_auc, "train_acc": train_acc}, **{"valid_auc": valid_auc, "valid_acc": valid_acc}})
+    history.append({"epoch":epoch, "lr": lr, 
+                    **{"train_auc": train_auc, "train_acc": train_acc}, 
+                    **{"valid_auc": valid_auc, "valid_acc": valid_acc}})
     if valid_auc > auc_max:
-        print("Epoch#%s, valid loss %.4f, Metric loss improved from %.4f to %.4f, saving model ..." % (epoch, valid_loss, auc_max, valid_auc))
+        print(f"Epoch #{epoch}, Metric loss improved from {auc_max:.4f} to {valid_auc:.4f}, saving model ...")
         auc_max = valid_auc
-        torch.save(model.state_dict(), os.path.join(snapshot_path, MODEL_BEST))
+        torch.save(model.state_dict(), 
+            os.path.join(MODEL_DIR, f"sakt_head_{NUM_HEAD}_fold{FOLD}_auc_{valid_auc:.4f}.pt"))
 
 if history:
     metric = "auc"
     # Plot training history
+
     history_pd = pd.DataFrame(history[1:]).set_index("epoch")
     train_history_pd = history_pd[[c for c in history_pd.columns if "train_" in c]]
     valid_history_pd = history_pd[[c for c in history_pd.columns if "valid_" in c]]
     lr_history_pd = history_pd[[c for c in history_pd.columns if "lr" in c]]
+    
     fig, ax = plt.subplots(1,2, figsize=(DEFAULT_FIG_WIDTH, 6))
+    
     t_epoch = train_history_pd["train_%s" % metric].argmin() if conf.METRIC_ == "min" else train_history_pd["train_%s" % metric].argmax()
+
     v_epoch = valid_history_pd["valid_%s" % metric].argmin() if conf.METRIC_ == "min" else valid_history_pd["valid_%s" % metric].argmax()
+    
     d = train_history_pd.plot(kind="line", ax=ax[0], title="Epoch: %d, Train: %.3f" % (t_epoch, train_history_pd.iloc[t_epoch,:]["train_%s" % metric]))
+    
     d = lr_history_pd.plot(kind="line", ax=ax[0], secondary_y=True)
+    
     d = valid_history_pd.plot(kind="line", ax=ax[1], title="Epoch: %d, Valid: %.3f" % (v_epoch, valid_history_pd.iloc[v_epoch,:]["valid_%s" % metric]))
+    
     d = lr_history_pd.plot(kind="line", ax=ax[1], secondary_y=True)
-    plt.savefig("%s/train.png" % snapshot_path, bbox_inches='tight')
+    
+    plt.savefig("%s/train.png" % MODEL_DIR, bbox_inches='tight')
     plt.show()
 # %% Test
 
@@ -407,9 +437,37 @@ class TestDataset(Dataset):
         return x, questions
 #%% Reload model with best weights
 model = SAKTModel(n_skill, embed_dim=conf.D_MODEL)
-resume_path = os.path.join(snapshot_path, MODEL_BEST)
-if os.path.exists(resume_path):
-    model.load_state_dict(torch.load(resume_path, map_location=conf.map_location))
-    print("Resuming, model weights loaded: %s" % resume_path)
+model_files = find_files('sakt', MODEL_DIR)
+print(f"Loading {model_files[-1]}")
+model.load_state_dict(torch.load(model_files[-1], map_location=conf.map_location))
 model.to(device)
 _ = model.eval()
+
+#%% 
+test_df = pd.read_csv(DATA_DIR+'example_test.csv', 
+                        dtype=TEST_DTYPES, 
+                        usecols=TEST_DTYPES.keys())
+test_df = test_df[test_df.content_type_id == False]
+    
+test_dataset = TestDataset(valid_group, test_df, skills)
+test_dataloader = DataLoader(test_dataset, batch_size=conf.BATCH_SIZE, shuffle=False, drop_last=False)
+
+outs = []
+
+for item in test_dataloader:
+    x = item[0].to(device).long()
+    target_id = item[1].to(device).long()
+
+    with torch.no_grad():
+        output, _ = model(x, target_id)
+            
+    output = torch.sigmoid(output)
+    output = output[:, -1]
+
+    outs.extend(output.view(-1).data.cpu().numpy())
+    
+test_df['answered_correctly'] = outs
+
+test_df['answered_correctly'].hist()
+# %%
+# %%
