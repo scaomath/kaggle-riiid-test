@@ -106,8 +106,8 @@ def get_feats(data_df):
     '''
     df = {}
     user_id_to_idx = {}
-    grp = data_df.groupby("user_id").tail(LAST_N) # Select last_n rows of each user.
-    grp_user = grp.groupby("user_id")
+    grp = data_df.groupby("user_id", sort=False).tail(LAST_N) # Select last_n rows of each user.
+    grp_user = grp.groupby("user_id", sort=False)
     num_user_id_grp = len(grp_user)
 
     with tqdm(total=num_user_id_grp) as pbar:
@@ -153,41 +153,82 @@ def get_feats_test(data_df):
     '''
     df = {}
     user_id_to_idx = {}
-    grp = data_df.groupby("user_id").tail(LAST_N) # Select last_n rows of each user.
-    grp_user = grp.groupby("user_id")
-    num_user_id_grp = len(grp_user)
+    grp = data_df.groupby("user_id", sort=False).tail(LAST_N) # Select last_n rows of each user.
+    grp_user = grp.groupby("user_id", sort=False)
+    
+    for idx, row in grp_user.agg({
+        "content_id":list, "task_container_id":list, 
+        "part_id":list, "prior_question_elapsed_time":list
+        }).reset_index().iterrows():
+        # here we make a split whether a user has more than equal to 100 entries or less than that
+        # if it's less than LAST_N, then we need to PAD it using the PAD token defined as 0 by me in this cell block
+        # also, padded will be True where we have done padding obviously, rest places it's False.
+        if len(row["content_id"]) >= 100:
+            df[idx] = {
+                "user_id": row["user_id"],
+                "content_id" : deque(row["content_id"], maxlen=LAST_N),
+                "task_container_id" : deque(row["task_container_id"], maxlen=LAST_N),
+                "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"], maxlen=LAST_N),
+                "part_id": deque(row["part_id"], maxlen=LAST_N),
+                "padded" : deque([False]*100, maxlen=LAST_N)
+            }
+        else:
+            # we have to pad...
+            # (max_batch_len - len(seq))
+            df[idx] = {
+                "user_id": row["user_id"],
+                "content_id" : deque(row["content_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
+                "task_container_id" : deque(row["task_container_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
+                "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
+                "part_id": deque(row["part_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
+                "padded" : deque([False]*len(row["content_id"]) + [True]*(100-len(row["content_id"])), maxlen=LAST_N)
+            }
+        user_id_to_idx[row["user_id"]] = idx
 
-    with tqdm(total=num_user_id_grp) as pbar:
-        for idx, row in grp_user.agg({
-            "content_id":list, "task_container_id":list, 
-            "part_id":list, "prior_question_elapsed_time":list
-            }).reset_index().iterrows():
-            # here we make a split whether a user has more than equal to 100 entries or less than that
-            # if it's less than LAST_N, then we need to PAD it using the PAD token defined as 0 by me in this cell block
-            # also, padded will be True where we have done padding obviously, rest places it's False.
-            if len(row["content_id"]) >= 100:
-                df[idx] = {
-                    "user_id": row["user_id"],
-                    "content_id" : deque(row["content_id"], maxlen=LAST_N),
-                    "task_container_id" : deque(row["task_container_id"], maxlen=LAST_N),
-                    "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"], maxlen=LAST_N),
-                    "part_id": deque(row["part_id"], maxlen=LAST_N),
-                    "padded" : deque([False]*100, maxlen=LAST_N)
-                }
-            else:
-                # we have to pad...
-                # (max_batch_len - len(seq))
-                df[idx] = {
-                    "user_id": row["user_id"],
-                    "content_id" : deque(row["content_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                    "task_container_id" : deque(row["task_container_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                    "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                    "part_id": deque(row["part_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                    "padded" : deque([False]*len(row["content_id"]) + [True]*(100-len(row["content_id"])), maxlen=LAST_N)
-                }
-            user_id_to_idx[row["user_id"]] = idx
-            if idx % TQDM_INT == 0:
-                pbar.update(TQDM_INT)
+    return df, user_id_to_idx
+
+
+def get_feats_train(data_df):
+    '''
+    Using a deque as it automatically limits the max_size as per the Data Strucutre's defination itself
+    so we don't need to manage that...
+    '''
+    df = {}
+    user_id_to_idx = {}
+    grp = data_df.groupby("user_id", sort=False).tail(LAST_N) # Select last_n rows of each user.
+    grp_user = grp.groupby("user_id", sort=False)
+
+    for idx, row in grp_user.agg({
+        "content_id":list, "answered_correctly":list, "task_container_id":list, 
+        "part_id":list, "prior_question_elapsed_time":list
+        }).reset_index().iterrows():
+        # here we make a split whether a user has more than equal to 100 entries or less than that
+        # if it's less than LAST_N, then we need to PAD it using the PAD token defined as 0 by me in this cell block
+        # also, padded will be True where we have done padding obviously, rest places it's False.
+        if len(row["content_id"]) >= 100:
+            df[idx] = {
+                "user_id": row["user_id"],
+                "content_id" : deque(row["content_id"], maxlen=LAST_N),
+                "answered_correctly" : deque(row["answered_correctly"], maxlen=LAST_N),
+                "task_container_id" : deque(row["task_container_id"], maxlen=LAST_N),
+                "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"], maxlen=LAST_N),
+                "part_id": deque(row["part_id"], maxlen=LAST_N),
+                "padded" : deque([False]*100, maxlen=LAST_N)
+            }
+        else:
+            # we have to pad...
+            # (max_batch_len - len(seq))
+            df[idx] = {
+                "user_id": row["user_id"],
+                "content_id" : deque(row["content_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
+                "answered_correctly" : deque(row["answered_correctly"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
+                "task_container_id" : deque(row["task_container_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
+                "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
+                "part_id": deque(row["part_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
+                "padded" : deque([False]*len(row["content_id"]) + [True]*(100-len(row["content_id"])), maxlen=LAST_N)
+            }
+        user_id_to_idx[row["user_id"]] = idx
+
         # if in future a new user comes, we will just increase the counts as of now... <WIP>
     return df, user_id_to_idx
 

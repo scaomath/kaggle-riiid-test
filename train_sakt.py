@@ -67,18 +67,17 @@ TEST_DTYPES = {
 }
 
 TQDM_INT = 4
-HOME =  "/home/scao/Documents/kaggle-riiid-test"
+HOME =  "/home/scao/Documents/kaggle-riiid-test/"
 MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
 DATA_DIR = HOME+'/data/'
 MODEL_NAME = "SAKT"
 MODEL_PATH = HOME + 'model'
 STAGE = "stage1"
-MODEL_BEST = f'model_sakt.pt'
 FOLD = 1
 NUM_HEAD = 8
 
-if not os.path.exists(MODEL_PATH):
-    os.makedirs(MODEL_PATH)
+# if not os.path.exists(MODEL_PATH):
+    # os.makedirs(MODEL_PATH)
     
 CONTENT_TYPE_ID = "content_type_id"
 CONTENT_ID = "content_id"
@@ -344,7 +343,8 @@ criterion = nn.BCEWithLogitsLoss()
 model.to(device)
 criterion.to(device);
 num_params = get_num_params(model)
-print("Stage:", STAGE, "fold:", FOLD, "on:", DEVICE, "workers:", conf.WORKERS, "batch size:", conf.BATCH_SIZE, "metric_:", conf.METRIC_) 
+print("Fold:", FOLD, "on:", DEVICE, 
+      "workers:", conf.WORKERS, "batch size:", conf.BATCH_SIZE, "metric_:", conf.METRIC_) 
 print(f"# of params in model: {num_params}")
 print( "train dataset:", len(train_dataset), "valid dataset:", len(valid_dataset))
 # %%
