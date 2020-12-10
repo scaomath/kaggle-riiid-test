@@ -6,7 +6,7 @@ import time
 from sklearn.metrics import roc_auc_score
 import torch
 
-from models import *
+from sakt import *
 from utils import *
 from dataset import *
 
@@ -91,25 +91,25 @@ class Iter_Valid(object):
         else:
             raise StopIteration()
 
-def load_model(model_file, device='cuda'):
+def load_sakt_model(model_file, device='cuda'):
     # creating the model and load the weights
-    model = TransformerModel(ninp=LAST_N, nhead=10, nhid=128, nlayers=4, dropout=0.3)
+    model = SAKTModel(N_SKILL, embed_dim=D_MODEL)
     model = model.to(device)
-    model.load_state_dict(torch.load(model_file,map_location=device))
+    model.load_state_dict(torch.load(model_file, map_location=device))
 
     return model
 
-def find_best_model(model_dir = MODEL_DIR, model_file=None):
+def find_sakt_model(model_dir = MODEL_DIR, model_file=None):
     # find the best AUC model, or a given model
     if model_file is None:
-        model_files = find_files('model', model_dir)
+        model_files = find_files('sakt', model_dir)
         tmp = [s.rsplit('.')[-2] for s in model_files]
         model_file = model_files[argmax(tmp)]
     return model_file
 
 if DEBUG:
-    test_df = pd.read_pickle(DATA_DIR+'cv2_valid.pickle')
-    test_df[:SIMU_PUB_SIZE].to_pickle(DATA_DIR+'test_pub_simu.pickle')
+    test_df = pd.read_pickle(DATA_DIR+'cv2_valid.parquet')
+    test_df[:SIMU_PUB_SIZE].to_pickle(DATA_DIR+'test_pub_simu.parquet')
 
 #%%
 if __name__ == "__main__":
@@ -126,9 +126,9 @@ if __name__ == "__main__":
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'\n\n Using device: {device} \n\n')
-    model_file = find_best_model()
+    model_file = find_sakt_model()
     model_name = model_file.split('/')[-1]
-    model = load_model(model_file)
+    model = load_sakt_model(model_file)
     print(f'\nLoaded {model_name}.')
     model.eval()
     print(model)

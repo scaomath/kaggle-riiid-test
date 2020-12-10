@@ -8,10 +8,9 @@ import pandas as pd
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 
-
 import torch
 import torch.nn as nn
-# import torch.nn.utils.rnn as rnn_utils
+import torch.nn.utils.rnn as rnn_utils
 from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
 
@@ -23,31 +22,13 @@ DEFAULT_FIG_WIDTH = 20
 sns.set_context("paper", font_scale=1.2) 
 
 from utils import *
-# from sakt import *
-
-class conf:
-    TQDM_INT = 8
-    METRIC_ = "max"
-    WORKERS = 10 # 0
-    BATCH_SIZE = 2048
-    lr = 1e-3
-    D_MODEL = 128
-    NUM_HEAD = 8
-    N_SKILLS = 13523 # len(skills)
-
-    if torch.cuda.is_available():
-        map_location = lambda storage, loc: storage.cuda()
-    else:
-        map_location='cpu'
 
 print('Python     : ' + sys.version.split('\n')[0])
 print('Numpy      : ' + np.__version__)
 print('Pandas     : ' + pd.__version__)
 print('PyTorch    : ' + torch.__version__)
-DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu') # if IS_TPU == False else xm.xla_device()
+DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 print(f'Device     : {DEVICE}')
-
-
 # %%
 '''
 https://www.kaggle.com/mpware/sakt-fork
@@ -64,6 +45,7 @@ torch.sigmoid added/fixed to train loop
 Training plot
 Train/Valid simple split to save best model
 '''
+
 
 CONTENT_TYPE_ID = "content_type_id"
 CONTENT_ID = "content_id"
@@ -90,30 +72,44 @@ TEST_DTYPES = {
 }
 
 TQDM_INT = 4
-HOME =  "/home/scao/Documents/kaggle-riiid-test/"
+HOME =  "/home/scao/Documents/kaggle-riiid-test"
 MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
 DATA_DIR = HOME+'/data/'
-MODEL_NAME = "SAKT"
 MODEL_PATH = HOME + 'model'
 STAGE = "stage1"
 FOLD = 1
 NUM_HEAD = 8
 
-class conf:
-    TQDM_INT = 8
-    METRIC_ = "max"
-    WORKERS = 10 # 0
-    BATCH_SIZE = 2048
-    lr = 1e-3
-    D_MODEL = 128
-    NUM_HEAD = 8
-    N_SKILLS = 13523 # len(skills)
+# if not os.path.exists(MODEL_PATH):
+#     os.makedirs(MODEL_PATH)
+    
+# %%
 
-    if torch.cuda.is_available():
-        map_location = lambda storage, loc: storage.cuda()
-    else:
-        map_location='cpu'
+train_df = pd.read_csv(DATA_DIR + 'train.csv', usecols=[1, 2, 3, 4, 7], dtype=TRAIN_DTYPES)
+train_df = train_df[train_df[CONTENT_TYPE_ID] == False].reset_index(drop = True)
+print(len(train_df))
+# Valid with last 100 interactions (must be improved to balance new users and be around 2.5M rows only)
+# However, valid_df includes all users' history needed for testing.
+valid_df = train_df.groupby([USER_ID]).tail(100)
+# Train
+train_df.drop(valid_df.index, inplace = True)
+print("valid:", valid_df.shape, "users:", valid_df[USER_ID].nunique())
+print("train:", train_df.shape, "users:", train_df[USER_ID].nunique())
+# print(train_df[train_df[USER_ID] == 2147482216].head(10))
+# print(valid_df[valid_df[USER_ID] == 115].head(10))
 
+skills = train_df[CONTENT_ID].unique()
+n_skill = len(skills) # 13523
+print("Number of skills", n_skill)
+
+# Index by user_id
+valid_df = valid_df.reset_index(drop = True)
+valid_group = valid_df[[USER_ID, CONTENT_ID, TARGET]].groupby(USER_ID).apply(lambda r: (r[CONTENT_ID].values, r[TARGET].values))
+
+# Index by user_id
+train_df = train_df.reset_index(drop = True)
+train_group = train_df[[USER_ID, CONTENT_ID, TARGET]].groupby(USER_ID).apply(lambda r: (r[CONTENT_ID].values, r[TARGET].values))
+# %%
 class SAKTDataset(Dataset):
     def __init__(self, group, n_skill, subset="train", max_seq=100):
         super(SAKTDataset, self).__init__()
@@ -192,13 +188,12 @@ class SAKTModel(nn.Module):
         super(SAKTModel, self).__init__()
         self.n_skill = n_skill
         self.embed_dim = embed_dim
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         self.embedding = nn.Embedding(2*n_skill+1, embed_dim)
         self.pos_embedding = nn.Embedding(max_seq-1, embed_dim)
         self.e_embedding = nn.Embedding(n_skill+1, embed_dim)
 
-        self.multi_att = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=conf.NUM_HEAD, dropout=0.3)
+        self.multi_att = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=NUM_HEAD, dropout=0.3)
 
         self.dropout = nn.Dropout(0.3)
         self.layer_normal = nn.LayerNorm(embed_dim) 
@@ -207,9 +202,9 @@ class SAKTModel(nn.Module):
         self.pred = nn.Linear(embed_dim, 1)
     
     def forward(self, x, question_ids):
-        device = self.device        
+        device = x.device        
         x = self.embedding(x)
-        pos_id = torch.arange(x.size(1)).to(device).unsqueeze(0)
+        pos_id = torch.arange(x.size(1)).unsqueeze(0).to(device)
 
         pos_x = self.pos_embedding(pos_id)
         x = x + pos_x
@@ -228,7 +223,7 @@ class SAKTModel(nn.Module):
         x = self.pred(x)
 
         return x.squeeze(-1), att_weight
-
+# %%
 def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
     model.train()
 
@@ -238,6 +233,7 @@ def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
     labels = []
     outs = []
 
+    
     len_dataset = len(train_iterator)
 
     with tqdm(total=len_dataset) as pbar:
@@ -248,7 +244,6 @@ def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
 
             optim.zero_grad()
             output, atten_weight = model(x, target_id)
-            print(f'X shape: {x.shape}, target_id shape: {target_id.shape}')
             loss = criterion(output, label)
             loss.backward()
             optim.step()
@@ -265,9 +260,9 @@ def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
             #outs.extend(output.view(-1).data.cpu().numpy())
             outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
 
-            if idx % conf.TQDM_INT == 0:
+            if idx % TQDM_INT == 0:
                 pbar.set_description(f'loss - {train_loss[-1]:.4f}')
-                pbar.update(conf.TQDM_INT)
+                pbar.update(TQDM_INT)
     
     acc = num_corrects / num_total
     auc = roc_auc_score(labels, outs)
@@ -305,42 +300,32 @@ def valid_epoch(model, valid_iterator, criterion, device="cuda"):
         #outs.extend(output.view(-1).data.cpu().numpy())
         outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
 
+        #tbar.set_description('loss - {:.4f}'.format(loss))
+
     acc = num_corrects / num_total
     auc = roc_auc_score(labels, outs)
     loss = np.mean(valid_loss)
 
     return loss, acc, auc
-# %%
 
-train_df = pd.read_pickle(DATA_DIR+'cv2_train.pickle')
-valid_df = pd.read_pickle(DATA_DIR+'cv2_valid.pickle')
-print("valid:", valid_df.shape, "users:", valid_df[USER_ID].nunique())
-print("train:", train_df.shape, "users:", train_df[USER_ID].nunique())
-# print(train_df[train_df[USER_ID] == 2147482216].head(10))
-# print(valid_df[valid_df[USER_ID] == 115].head(10))
+class conf:
+    METRIC_ = "max"
+    WORKERS = 10 # 0
+    BATCH_SIZE = 512
+    VAL_BATCH_SIZE = 2048
+    lr = 1e-3
+    D_MODEL = 128
 
-skills = train_df[CONTENT_ID].unique()
-n_skill = 13523 # len(skills)
-print("Number of skills", n_skill)
-
-# Index by user_id
-valid_df = valid_df.reset_index(drop = True)
-valid_group = valid_df[[USER_ID, CONTENT_ID, TARGET]].groupby(USER_ID).apply(lambda r: (r[CONTENT_ID].values, r[TARGET].values))
-
-# Index by user_id
-train_df = train_df.reset_index(drop = True)
-train_group = train_df[[USER_ID, CONTENT_ID, TARGET]].groupby(USER_ID).apply(lambda r: (r[CONTENT_ID].values, r[TARGET].values))
-
+    if torch.cuda.is_available():
+        map_location=lambda storage, loc: storage.cuda()
+    else:
+        map_location='cpu'
 # %%
 train_dataset = SAKTDataset(train_group, n_skill, subset="train")
-train_dataloader = DataLoader(train_dataset, 
-                              batch_size=conf.BATCH_SIZE, 
-                              shuffle=True)
+train_dataloader = DataLoader(train_dataset, batch_size=conf.BATCH_SIZE, shuffle=True, num_workers=conf.WORKERS)
 
 valid_dataset = SAKTDataset(valid_group, n_skill, subset="valid")
-valid_dataloader = DataLoader(valid_dataset, 
-                              batch_size=conf.BATCH_SIZE, 
-                              shuffle=False)
+valid_dataloader = DataLoader(valid_dataset, batch_size=conf.VAL_BATCH_SIZE, shuffle=False, num_workers=conf.WORKERS)
 
 item = train_dataset.__getitem__(5)
 
@@ -354,10 +339,10 @@ model = SAKTModel(n_skill, embed_dim=conf.D_MODEL)
 optimizer = torch.optim.Adam(model.parameters(), lr=conf.lr)
 criterion = nn.BCEWithLogitsLoss()
 
-criterion.to(device)
+model.to(device)
+criterion.to(device);
 num_params = get_num_params(model)
-print("Fold:", FOLD, "on:", DEVICE, 
-      "batch size:", conf.BATCH_SIZE, "metric_:", conf.METRIC_) 
+print("Stage:", STAGE, "fold:", FOLD, "on:", DEVICE, "workers:", conf.WORKERS, "batch size:", conf.BATCH_SIZE, "metric_:", conf.METRIC_) 
 print(f"# of params in model: {num_params}")
 print( "train dataset:", len(train_dataset), "valid dataset:", len(valid_dataset))
 # %%
@@ -367,8 +352,8 @@ history = []
 
 for epoch in range(1, epochs+1):
     train_loss, train_acc, train_auc = train_epoch(model, train_dataloader, optimizer, criterion, device)
-    valid_loss, valid_acc, valid_auc = valid_epoch(model, valid_dataloader, criterion, device)
     print(f"\nEpoch #{epoch}, train_loss - {train_loss:.2f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
+    valid_loss, valid_acc, valid_auc = valid_epoch(model, valid_dataloader, criterion, device)
     print(f"Epoch #{epoch}, valid_loss - {valid_loss:.2f} acc - {valid_acc:.4f} auc - {valid_auc:.4f}")
     lr = optimizer.param_groups[0]['lr']
     history.append({"epoch":epoch, "lr": lr, 

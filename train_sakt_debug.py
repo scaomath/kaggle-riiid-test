@@ -8,10 +8,9 @@ import pandas as pd
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 
-
 import torch
 import torch.nn as nn
-# import torch.nn.utils.rnn as rnn_utils
+import torch.nn.utils.rnn as rnn_utils
 from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
 
@@ -23,32 +22,13 @@ DEFAULT_FIG_WIDTH = 20
 sns.set_context("paper", font_scale=1.2) 
 
 from utils import *
-# from sakt import *
-
-class conf:
-    TQDM_INT = 8
-    METRIC_ = "max"
-    WORKERS = 10 # 0
-    BATCH_SIZE = 2048
-    lr = 1e-3
-    D_MODEL = 128
-    NUM_HEAD = 8
-    N_SKILLS = 13523 # len(skills)
-
-    if torch.cuda.is_available():
-        map_location = lambda storage, loc: storage.cuda()
-    else:
-        map_location='cpu'
 
 print('Python     : ' + sys.version.split('\n')[0])
 print('Numpy      : ' + np.__version__)
 print('Pandas     : ' + pd.__version__)
 print('PyTorch    : ' + torch.__version__)
-DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu') # if IS_TPU == False else xm.xla_device()
+DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 print(f'Device     : {DEVICE}')
-
-
-# %%
 '''
 https://www.kaggle.com/mpware/sakt-fork
 Self-Attentive model for Knowledge Tracing model (SAKT)
@@ -89,95 +69,177 @@ TEST_DTYPES = {
     'prior_question_had_explanation': 'boolean'
 }
 
-TQDM_INT = 4
+TQDM_INT = 8 
 HOME =  "/home/scao/Documents/kaggle-riiid-test/"
 MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
 DATA_DIR = HOME+'/data/'
-MODEL_NAME = "SAKT"
 MODEL_PATH = HOME + 'model'
 STAGE = "stage1"
 FOLD = 1
-NUM_HEAD = 8
+NUM_HEADS = 10
+NUM_EMBED = 128
 
-class conf:
-    TQDM_INT = 8
-    METRIC_ = "max"
-    WORKERS = 10 # 0
-    BATCH_SIZE = 2048
-    lr = 1e-3
-    D_MODEL = 128
-    NUM_HEAD = 8
-    N_SKILLS = 13523 # len(skills)
+MAX_SEQ = 100
+DEBUG = True
+NROWS_TRAIN = 5_000_000
+N_TAIL = 100
+# if not os.path.exists(MODEL_PATH):
+    # os.makedirs(MODEL_PATH)
+    
+# %%
 
-    if torch.cuda.is_available():
-        map_location = lambda storage, loc: storage.cuda()
-    else:
-        map_location='cpu'
+# train_df = pd.read_pickle(DATA_DIR+'cv2_train.pickle')
+# valid_df = pd.read_pickle(DATA_DIR+'cv2_valid.pickle')
+# train_df = train_df[TRAIN_DTYPES.keys()]
+# valid_df = valid_df[TRAIN_DTYPES.keys()]
+if DEBUG:
+    train_df = pd.read_csv(DATA_DIR + 'train.csv', 
+                        nrows=NROWS_TRAIN, 
+                        usecols=[1, 2, 3, 4, 7], 
+                        dtype=TRAIN_DTYPES)
+else:
+    train_df = pd.read_csv(DATA_DIR + 'train.csv', 
+                        usecols=[1, 2, 3, 4, 7], 
+                        dtype=TRAIN_DTYPES)
+train_df = train_df[train_df[CONTENT_TYPE_ID] == False]
+#arrange by timestamp
+train_df = train_df.sort_values(['timestamp'], ascending=True).reset_index(drop = True)
+print(len(train_df))
+
+valid_df = train_df.groupby([USER_ID]).tail(N_TAIL)
+train_df.drop(valid_df.index, inplace = True)
+
+print("valid:", valid_df.shape, "users:", valid_df[USER_ID].nunique())
+print("train:", train_df.shape, "users:", train_df[USER_ID].nunique())
+# print(train_df[train_df[USER_ID] == 2147482216].head(10))
+# print(valid_df[valid_df[USER_ID] == 115].head(10))
+
+skills = train_df[CONTENT_ID].unique()
+n_skill = len(skills)
+print("Number of skills", n_skill)
+
+# Index by user_id
+valid_df = valid_df.reset_index(drop = True)
+valid_group = valid_df[[USER_ID, CONTENT_ID, TARGET]].groupby(USER_ID)\
+    .apply(lambda r: (r[CONTENT_ID].values, r[TARGET].values))
+
+# Index by user_id
+train_df = train_df.reset_index(drop = True)
+train_group = train_df[[USER_ID, CONTENT_ID, TARGET]].groupby(USER_ID)\
+    .apply(lambda r: (r[CONTENT_ID].values, r[TARGET].values))
+
+# %%
+# class SAKTDataset(Dataset):
+#     def __init__(self, group, n_skill, subset="train", max_seq = MAX_SEQ):
+#         super(SAKTDataset, self).__init__()
+#         self.max_seq = max_seq
+#         self.n_skill = n_skill # 13523
+#         self.samples = group
+#         self.subset = subset
+        
+#         # self.user_ids = [x for x in group.index]
+#         self.user_ids = []
+#         for user_id in group.index:
+#             q, qa = group[user_id]
+#             if len(q) < 10: # 10 interactions minimum
+#                 continue
+#             self.user_ids.append(user_id) # user_ids indexes
+
+#     def __len__(self):
+#         return len(self.user_ids)
+
+#     def __getitem__(self, index):
+#         user_id = self.user_ids[index] # Pick a user
+#         q_, qa_ = self.samples[user_id] # Pick full sequence for user
+#         seq_len = len(q_)
+
+#         q = np.zeros(self.max_seq, dtype=int)
+#         qa = np.zeros(self.max_seq, dtype=int)
+
+#         if seq_len >= self.max_seq:
+#             if self.subset == "train":
+#                 if seq_len > self.max_seq:
+#                     random_start_index = np.random.randint(seq_len - self.max_seq)
+#                     q[:] = q_[random_start_index:random_start_index + self.max_seq] # Pick 100 questions from a random index
+#                     qa[:] = qa_[random_start_index:random_start_index + self.max_seq] # Pick 100 answers from a random index
+#                 else:
+#                     q[:] = q_[-self.max_seq:]
+#                     qa[:] = qa_[-self.max_seq:]
+#             else:
+#                 q[:] = q_[-self.max_seq:] # Pick last 100 questions
+#                 qa[:] = qa_[-self.max_seq:] # Pick last 100 answers
+#         else:
+#             q[-seq_len:] = q_ # Pick last N question with zero padding
+#             qa[-seq_len:] = qa_ # Pick last N answers with zero padding        
+                
+#         target_id = q[1:] # Ignore first item 1 to 99
+#         label = qa[1:] # Ignore first item 1 to 99
+
+#         # x = np.zeros(self.max_seq-1, dtype=int)
+#         x = q[:-1].copy() # 0 to 98
+#         x += (qa[:-1] == 1) * self.n_skill # y = et + rt x E
+
+#         return x, target_id, label
+
 
 class SAKTDataset(Dataset):
-    def __init__(self, group, n_skill, subset="train", max_seq=100):
+    def __init__(self, group, n_skill, max_seq=MAX_SEQ): #HDKIM 100
         super(SAKTDataset, self).__init__()
         self.max_seq = max_seq
-        self.n_skill = n_skill # 13523
+        self.n_skill = n_skill
         self.samples = group
-        self.subset = subset
         
-        # self.user_ids = [x for x in group.index]
+#         self.user_ids = [x for x in group.index]
         self.user_ids = []
         for user_id in group.index:
             q, qa = group[user_id]
-            if len(q) < 10: # 10 interactions minimum
+            if len(q) < 5: #HDKIM 10
                 continue
-            self.user_ids.append(user_id) # user_ids indexes
+            self.user_ids.append(user_id)
+            
+            #HDKIM Memory reduction
+            if len(q)>self.max_seq:
+                group[user_id] = (q[-self.max_seq:],qa[-self.max_seq:])
 
     def __len__(self):
         return len(self.user_ids)
 
     def __getitem__(self, index):
-        user_id = self.user_ids[index] # Pick a user
-        q_, qa_ = self.samples[user_id] # Pick full sequence for user
+        user_id = self.user_ids[index]
+        q_, qa_ = self.samples[user_id]
         seq_len = len(q_)
 
         q = np.zeros(self.max_seq, dtype=int)
         qa = np.zeros(self.max_seq, dtype=int)
-
         if seq_len >= self.max_seq:
-            if self.subset == "train":
-                if seq_len > self.max_seq:
-                    random_start_index = np.random.randint(seq_len - self.max_seq)
-                    q[:] = q_[random_start_index:random_start_index + self.max_seq] # Pick 100 questions from a random index
-                    qa[:] = qa_[random_start_index:random_start_index + self.max_seq] # Pick 100 answers from a random index
-                else:
-                    q[:] = q_[-self.max_seq:]
-                    qa[:] = qa_[-self.max_seq:]
-            else:
-                q[:] = q_[-self.max_seq:] # Pick last 100 questions
-                qa[:] = qa_[-self.max_seq:] # Pick last 100 answers
+            q[:] = q_[-self.max_seq:]
+            qa[:] = qa_[-self.max_seq:]
         else:
-            q[-seq_len:] = q_ # Pick last N question with zero padding
-            qa[-seq_len:] = qa_ # Pick last N answers with zero padding        
-                
-        target_id = q[1:] # Ignore first item 1 to 99
-        label = qa[1:] # Ignore first item 1 to 99
+            q[-seq_len:] = q_
+            qa[-seq_len:] = qa_
+        
+        target_id = q[1:]
+        label = qa[1:]
 
-        # x = np.zeros(self.max_seq-1, dtype=int)
-        x = q[:-1].copy() # 0 to 98
-        x += (qa[:-1] == 1) * self.n_skill # y = et + rt x E
+        x = np.zeros(self.max_seq-1, dtype=int)
+        x = q[:-1].copy()
+        x += (qa[:-1] == 1) * self.n_skill
 
         return x, target_id, label
 
 class FFN(nn.Module):
-    def __init__(self, state_size=200):
+    def __init__(self, state_size=256):
         super(FFN, self).__init__()
         self.state_size = state_size
 
         self.lr1 = nn.Linear(state_size, state_size)
         self.relu = nn.ReLU()
         self.lr2 = nn.Linear(state_size, state_size)
-        self.dropout = nn.Dropout(0.2)
+        self.dropout = nn.Dropout(0.3)
     
     def forward(self, x):
         x = self.lr1(x)
+        x = self.dropout(x)
         x = self.relu(x)
         x = self.lr2(x)
         return self.dropout(x)
@@ -188,28 +250,32 @@ def future_mask(seq_length):
 
 
 class SAKTModel(nn.Module):
-    def __init__(self, n_skill, max_seq=100, embed_dim=128):
+    def __init__(self, n_skill, 
+                       max_seq=MAX_SEQ, 
+                       embed_dim=NUM_EMBED, 
+                       num_heads=NUM_HEADS): #HDKIM 100
         super(SAKTModel, self).__init__()
         self.n_skill = n_skill
         self.embed_dim = embed_dim
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         self.embedding = nn.Embedding(2*n_skill+1, embed_dim)
         self.pos_embedding = nn.Embedding(max_seq-1, embed_dim)
         self.e_embedding = nn.Embedding(n_skill+1, embed_dim)
 
-        self.multi_att = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=conf.NUM_HEAD, dropout=0.3)
+        self.multi_att = nn.MultiheadAttention(embed_dim=embed_dim, 
+                                               num_heads=num_heads, 
+                                               dropout=0.2)
 
-        self.dropout = nn.Dropout(0.3)
+        self.dropout = nn.Dropout(0.2)
         self.layer_normal = nn.LayerNorm(embed_dim) 
 
         self.ffn = FFN(embed_dim)
         self.pred = nn.Linear(embed_dim, 1)
     
     def forward(self, x, question_ids):
-        device = self.device        
+        device = x.device
         x = self.embedding(x)
-        pos_id = torch.arange(x.size(1)).to(device).unsqueeze(0)
+        pos_id = torch.arange(x.size(1)).unsqueeze(0).to(device)
 
         pos_x = self.pos_embedding(pos_id)
         x = x + pos_x
@@ -228,7 +294,7 @@ class SAKTModel(nn.Module):
         x = self.pred(x)
 
         return x.squeeze(-1), att_weight
-
+# %%
 def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
     model.train()
 
@@ -237,7 +303,7 @@ def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
     num_total = 0
     labels = []
     outs = []
-
+    
     len_dataset = len(train_iterator)
 
     with tqdm(total=len_dataset) as pbar:
@@ -248,7 +314,6 @@ def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
 
             optim.zero_grad()
             output, atten_weight = model(x, target_id)
-            print(f'X shape: {x.shape}, target_id shape: {target_id.shape}')
             loss = criterion(output, label)
             loss.backward()
             optim.step()
@@ -265,9 +330,9 @@ def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
             #outs.extend(output.view(-1).data.cpu().numpy())
             outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
 
-            if idx % conf.TQDM_INT == 0:
+            if idx % TQDM_INT == 0:
                 pbar.set_description(f'loss - {train_loss[-1]:.4f}')
-                pbar.update(conf.TQDM_INT)
+                pbar.update(TQDM_INT)
     
     acc = num_corrects / num_total
     auc = roc_auc_score(labels, outs)
@@ -305,61 +370,108 @@ def valid_epoch(model, valid_iterator, criterion, device="cuda"):
         #outs.extend(output.view(-1).data.cpu().numpy())
         outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
 
+
     acc = num_corrects / num_total
     auc = roc_auc_score(labels, outs)
     loss = np.mean(valid_loss)
 
     return loss, acc, auc
+
+class conf:
+    METRIC_ = "max"
+    WORKERS = 8 # 0
+    BATCH_SIZE = 512
+    VAL_BATCH_SIZE = 2048
+    lr = 1e-3
+    D_MODEL = 128
+    NUM_HEADS = 8
+
+    if torch.cuda.is_available():
+        map_location=lambda storage, loc: storage.cuda()
+    else:
+        map_location='cpu'
 # %%
-
-train_df = pd.read_pickle(DATA_DIR+'cv2_train.pickle')
-valid_df = pd.read_pickle(DATA_DIR+'cv2_valid.pickle')
-print("valid:", valid_df.shape, "users:", valid_df[USER_ID].nunique())
-print("train:", train_df.shape, "users:", train_df[USER_ID].nunique())
-# print(train_df[train_df[USER_ID] == 2147482216].head(10))
-# print(valid_df[valid_df[USER_ID] == 115].head(10))
-
-skills = train_df[CONTENT_ID].unique()
-n_skill = 13523 # len(skills)
-print("Number of skills", n_skill)
-
-# Index by user_id
-valid_df = valid_df.reset_index(drop = True)
-valid_group = valid_df[[USER_ID, CONTENT_ID, TARGET]].groupby(USER_ID).apply(lambda r: (r[CONTENT_ID].values, r[TARGET].values))
-
-# Index by user_id
-train_df = train_df.reset_index(drop = True)
-train_group = train_df[[USER_ID, CONTENT_ID, TARGET]].groupby(USER_ID).apply(lambda r: (r[CONTENT_ID].values, r[TARGET].values))
-
-# %%
-train_dataset = SAKTDataset(train_group, n_skill, subset="train")
+# train_dataset = SAKTDataset(train_group, n_skill, subset="train")
+train_dataset = SAKTDataset(train_group, n_skill)
 train_dataloader = DataLoader(train_dataset, 
                               batch_size=conf.BATCH_SIZE, 
-                              shuffle=True)
+                              shuffle=True, 
+                              num_workers=conf.WORKERS)
 
-valid_dataset = SAKTDataset(valid_group, n_skill, subset="valid")
+# valid_dataset = SAKTDataset(valid_group, n_skill, subset="valid")
+valid_dataset = SAKTDataset(valid_group, n_skill)
 valid_dataloader = DataLoader(valid_dataset, 
-                              batch_size=conf.BATCH_SIZE, 
-                              shuffle=False)
+                              batch_size=conf.VAL_BATCH_SIZE, 
+                              shuffle=False, 
+                              num_workers=conf.WORKERS)
 
 item = train_dataset.__getitem__(5)
 
-print("x", len(item[0]), item[0])
-print("target_id", len(item[1]), item[1])
+print("x", len(item[0]), item[0], '\n\n')
+print("target_id", len(item[1]), item[1] , '\n\n')
 print("label", len(item[2]), item[2])
 # %%
-device = DEVICE
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model = SAKTModel(n_skill, embed_dim=conf.D_MODEL)
-optimizer = torch.optim.Adam(model.parameters(), lr=conf.lr)
+model = SAKTModel(n_skill, embed_dim=conf.D_MODEL, num_heads=conf.NUM_HEADS)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 criterion = nn.BCEWithLogitsLoss()
 
+model.to(device)
 criterion.to(device)
 num_params = get_num_params(model)
-print("Fold:", FOLD, "on:", DEVICE, 
-      "batch size:", conf.BATCH_SIZE, "metric_:", conf.METRIC_) 
+print("\nFold:   ", FOLD, 
+      "\non:     ", DEVICE, 
+      "\nworkers:", conf.WORKERS, 
+      "\ntraining batch size:", conf.BATCH_SIZE, 
+      "\nmetric_:", conf.METRIC_) 
 print(f"# of params in model: {num_params}")
 print( "train dataset:", len(train_dataset), "valid dataset:", len(valid_dataset))
+
+
+#%%
+model.train()
+
+train_loss = []
+num_corrects = 0
+num_total = 0
+labels = []
+outs = []
+
+len_dataset = len(train_dataloader)
+
+
+for idx, item in enumerate(train_dataloader): 
+    print(f'\n\nBatch {idx+1}')
+    x = item[0].to(device).long()
+    target_id = item[1].to(device).long()
+    label = item[2].to(device).float()
+    
+    optimizer.zero_grad()
+    output, atten_weight = model(x, target_id)
+    loss = criterion(output, label)
+    loss.backward()
+    optimizer.step()
+    train_loss.append(loss.item())
+
+    output = output[:, -1]
+    label = label[:, -1] 
+    pred = (torch.sigmoid(output) >= 0.5).long()
+    
+    num_corrects += (pred == label).sum().item()
+    num_total += len(label)
+
+    labels.extend(label.view(-1).data.cpu().numpy())
+    #outs.extend(output.view(-1).data.cpu().numpy())
+    outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
+        
+
+# acc = num_corrects / num_total
+# auc = roc_auc_score(labels, outs)
+# loss = np.mean(train_loss)
+
+
+
 # %%
 epochs = 60
 auc_max = -np.inf

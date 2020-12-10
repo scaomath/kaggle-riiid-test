@@ -81,7 +81,7 @@ EPOCHS = 40
 
 DEBUG = False
 TRAIN = True
-PREPROCESS = True
+PREPROCESS = False
 TEST = False
 
 
@@ -172,9 +172,10 @@ if TRAIN:
     print("\n\nTraining...:")
     for epoch in range(1, EPOCHS+1):
         train_loss, train_acc, train_auc = train_epoch(model, train_loader, optimizer, criterion)
-        print(f"\n\n[Epoch {epoch}/{EPOCHS}]")
-        print(f"Train: loss - {train_loss:.2f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
         valid_loss, valid_acc, valid_auc = valid_epoch(model, val_loader, criterion)
+
+        print(f"\n\n[Epoch {epoch}/{EPOCHS}]")
+        print(f"\nTrain: loss - {train_loss:.2f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
         print(f"\nValid: loss - {valid_loss:.2f} acc - {valid_acc:.4f} auc - {valid_auc:.4f}")
         lr = optimizer.param_groups[0]['lr']
         history.append({"epoch":epoch, "lr": lr, 

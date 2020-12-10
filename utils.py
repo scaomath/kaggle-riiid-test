@@ -6,6 +6,7 @@ from sklearn.metrics import roc_auc_score
 import gc
 from contextlib import contextmanager
 import time
+
 def get_seed(s):
     random.seed(s)
     os.environ['PYTHONHASHSEED'] = str(s)
@@ -45,6 +46,9 @@ def find_files(name, path):
             if name in _file:
                 result.append(os.path.join(root, _file))
     return result
+
+def argmax(lst):
+  return lst.index(max(lst))
 
 def get_num_params(model):
     model_parameters = filter(lambda p: p.requires_grad, model.parameters())
