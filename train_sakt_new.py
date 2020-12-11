@@ -1,6 +1,7 @@
 #%%
 import gc, sys, os
 from tqdm import tqdm
+from time import time
 import pickle
 import numpy as np
 import pandas as pd
@@ -58,58 +59,62 @@ FOLD = 1
 
 TRAIN = True
 PREPROCESS = True
+DEBUG = True
 EPOCHS = 60
 LEARNING_RATE = 1e-3
+NROWS_TRAIN = 10_000_000
 
 #%%
 
-if PREPROCESS:
-    print("Preprocessing training...")
-    train_df = pd.read_csv(DATA_DIR+'train.csv', usecols=[1, 2, 3, 4, 7], dtype=TRAIN_DTYPES)
-    print(f'Loaded train.')
-    print(TRAIN_DTYPES)
-    train_df = train_df[train_df[CONTENT_TYPE_ID] == False]
-    train_df = train_df.sort_values([TIMESTAMP], ascending=True).reset_index(drop = True)
-    group = train_df[[USER_ID, CONTENT_ID, TARGET]].groupby(USER_ID)\
-        .apply(lambda r: (r[CONTENT_ID].values, r[TARGET].values))
-    train_group, valid_group = train_test_split(group, test_size=0.1)
-else: # using preprocessed files
-    print("Loading training...")
-    train_df = pd.read_parquet(DATA_DIR+'cv2_train.parquet')
-    valid_df = pd.read_parquet(DATA_DIR+'cv2_valid.parquet')
-    train_df = train_df[TRAIN_DTYPES.keys()]
-    valid_df = valid_df[TRAIN_DTYPES.keys()]
-    train_df = train_df[train_df[CONTENT_TYPE_ID] == False].reset_index(drop = True)
-    valid_df = valid_df[valid_df[CONTENT_TYPE_ID] == False].reset_index(drop = True)
+print("Loading training...")
+start = time()
+if DEBUG:
+    data_df = pd.read_csv(DATA_DIR+'train.csv', 
+                          usecols=[1, 2, 3, 4, 7, 8, 9], 
+                          nrows=NROWS_TRAIN,
+                          dtype=TRAIN_DTYPES)
+else:
+    data_df = pd.read_csv(DATA_DIR+'train.csv', usecols=[1, 2, 3, 4, 7, 8, 9], dtype=TRAIN_DTYPES)
+print(f"Loaded train.csv in {time()-start} seconds.\n\n")
 
-    print("valid:", valid_df.shape, "users:", valid_df[USER_ID].nunique())
-    print("train:", train_df.shape, "users:", train_df[USER_ID].nunique())
-    # Index by user_id
-    valid_group = valid_df[[USER_ID, CONTENT_ID, TARGET]].groupby(USER_ID)\
-        .apply(lambda r: (r[CONTENT_ID].values, r[TARGET].values))
+#%%
+print("Processing training...")
+train_df = data_df.copy()
+start = time()
+train_df[PRIOR_QUESTION_TIME].fillna(conf.FILLNA_VAL, inplace=True) 
+    # FILLNA_VAL different than all current values
+train_df[PRIOR_QUESTION_TIME] = round(train_df[PRIOR_QUESTION_TIME] / 1000, ndigits=1)
+train_df[PRIOR_QUESTION_TIME] = train_df[PRIOR_QUESTION_TIME].replace(np.inf, conf.FILLNA_VAL).astype(np.float16) 
+train_df[PRIOR_QUESTION_EXPLAIN] = train_df[PRIOR_QUESTION_EXPLAIN].astype(np.float16).fillna(-1).astype(np.int8)
 
-    # Index by user_id
-    train_group = train_df[[USER_ID, CONTENT_ID, TARGET]].groupby(USER_ID)\
-        .apply(lambda r: (r[CONTENT_ID].values, r[TARGET].values))
+train_df = train_df[train_df[CONTENT_TYPE_ID] == False]
+train_df = train_df.sort_values([TIMESTAMP], ascending=True).reset_index(drop = True)
 
-
+group = train_df[[USER_ID, CONTENT_ID, PRIOR_QUESTION_TIME, PRIOR_QUESTION_EXPLAIN, TARGET]]\
+    .groupby(USER_ID)\
+    .apply(lambda r: (r[CONTENT_ID].values, 
+                      r[PRIOR_QUESTION_TIME].values,
+                      r[PRIOR_QUESTION_EXPLAIN].values,
+                      r[TARGET].values))
+train_group, valid_group = train_test_split(group, test_size=0.1)
+print(f"Prcocessed train.csv in {time()-start} seconds.\n\n")
 
 # skills = train_df[CONTENT_ID].unique()
 n_skill = conf.NUM_SKILLS #len(skills) # len(skills) might not have all
 print("Number of skills", n_skill)
 
 
-print("valid by user:", len(valid_group))
-print("train by user:", len(train_group))
+print(f"Valid by user:  {len(valid_group)}")
+print(f"Train by user:  {len(train_group)}\n\n")
 
 # %%
-train_dataset = SAKTDataset(train_group, n_skill, subset="train")
+train_dataset = SAKTDatasetNew(train_group, n_skill, subset="train")
 train_loader = DataLoader(train_dataset, 
                               batch_size=conf.BATCH_SIZE, 
                               shuffle=True, 
                               num_workers=conf.WORKERS)
 
-valid_dataset = SAKTDataset(valid_group, n_skill, subset="valid")
+valid_dataset = SAKTDatasetNew(valid_group, n_skill, subset="valid")
 val_loader = DataLoader(valid_dataset, 
                               batch_size=conf.VAL_BATCH_SIZE, 
                               shuffle=False, 

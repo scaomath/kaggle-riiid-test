@@ -5,7 +5,7 @@ import torch
 from sklearn.metrics import roc_auc_score
 import gc
 from contextlib import contextmanager
-import time
+from time import time
 
 def get_seed(s):
     random.seed(s)
@@ -24,9 +24,9 @@ get_seed(SEED)
 
 @contextmanager
 def timer(title):
-    t0 = time.time()
+    t0 = time()
     yield
-    print("{} - done in {:.1f} seconds.\n".format(title, time.time() - t0))
+    print("{} - done in {:.1f} seconds.\n".format(title, time() - t0))
 
 def cpu_stats():
     pid = os.getpid()
