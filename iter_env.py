@@ -6,9 +6,9 @@ import time
 from sklearn.metrics import roc_auc_score
 import torch
 
-from models import *
+from transformer import *
+from transformer_dataset import *
 from utils import *
-from dataset import *
 
 DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
 MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'

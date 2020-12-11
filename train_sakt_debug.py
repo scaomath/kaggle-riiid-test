@@ -78,7 +78,7 @@ STAGE = "stage1"
 FOLD = 1
 NUM_HEADS = 10
 NUM_EMBED = 128
-
+NUM_SKILLS = 13523
 MAX_SEQ = 100
 DEBUG = True
 NROWS_TRAIN = 5_000_000
@@ -115,7 +115,7 @@ print("train:", train_df.shape, "users:", train_df[USER_ID].nunique())
 # print(valid_df[valid_df[USER_ID] == 115].head(10))
 
 skills = train_df[CONTENT_ID].unique()
-n_skill = len(skills)
+n_skill = NUM_SKILLS #len(skills) # len(skills) might not have all
 print("Number of skills", n_skill)
 
 # Index by user_id
@@ -129,103 +129,103 @@ train_group = train_df[[USER_ID, CONTENT_ID, TARGET]].groupby(USER_ID)\
     .apply(lambda r: (r[CONTENT_ID].values, r[TARGET].values))
 
 # %%
-# class SAKTDataset(Dataset):
-#     def __init__(self, group, n_skill, subset="train", max_seq = MAX_SEQ):
-#         super(SAKTDataset, self).__init__()
-#         self.max_seq = max_seq
-#         self.n_skill = n_skill # 13523
-#         self.samples = group
-#         self.subset = subset
-        
-#         # self.user_ids = [x for x in group.index]
-#         self.user_ids = []
-#         for user_id in group.index:
-#             q, qa = group[user_id]
-#             if len(q) < 10: # 10 interactions minimum
-#                 continue
-#             self.user_ids.append(user_id) # user_ids indexes
-
-#     def __len__(self):
-#         return len(self.user_ids)
-
-#     def __getitem__(self, index):
-#         user_id = self.user_ids[index] # Pick a user
-#         q_, qa_ = self.samples[user_id] # Pick full sequence for user
-#         seq_len = len(q_)
-
-#         q = np.zeros(self.max_seq, dtype=int)
-#         qa = np.zeros(self.max_seq, dtype=int)
-
-#         if seq_len >= self.max_seq:
-#             if self.subset == "train":
-#                 if seq_len > self.max_seq:
-#                     random_start_index = np.random.randint(seq_len - self.max_seq)
-#                     q[:] = q_[random_start_index:random_start_index + self.max_seq] # Pick 100 questions from a random index
-#                     qa[:] = qa_[random_start_index:random_start_index + self.max_seq] # Pick 100 answers from a random index
-#                 else:
-#                     q[:] = q_[-self.max_seq:]
-#                     qa[:] = qa_[-self.max_seq:]
-#             else:
-#                 q[:] = q_[-self.max_seq:] # Pick last 100 questions
-#                 qa[:] = qa_[-self.max_seq:] # Pick last 100 answers
-#         else:
-#             q[-seq_len:] = q_ # Pick last N question with zero padding
-#             qa[-seq_len:] = qa_ # Pick last N answers with zero padding        
-                
-#         target_id = q[1:] # Ignore first item 1 to 99
-#         label = qa[1:] # Ignore first item 1 to 99
-
-#         # x = np.zeros(self.max_seq-1, dtype=int)
-#         x = q[:-1].copy() # 0 to 98
-#         x += (qa[:-1] == 1) * self.n_skill # y = et + rt x E
-
-#         return x, target_id, label
-
-
 class SAKTDataset(Dataset):
-    def __init__(self, group, n_skill, max_seq=MAX_SEQ): #HDKIM 100
+    def __init__(self, group, n_skill, subset="train", max_seq = MAX_SEQ):
         super(SAKTDataset, self).__init__()
         self.max_seq = max_seq
-        self.n_skill = n_skill
+        self.n_skill = n_skill # 13523
         self.samples = group
+        self.subset = subset
         
-#         self.user_ids = [x for x in group.index]
+        # self.user_ids = [x for x in group.index]
         self.user_ids = []
         for user_id in group.index:
             q, qa = group[user_id]
-            if len(q) < 5: #HDKIM 10
+            if len(q) < 10: # 10 interactions minimum
                 continue
-            self.user_ids.append(user_id)
-            
-            #HDKIM Memory reduction
-            if len(q)>self.max_seq:
-                group[user_id] = (q[-self.max_seq:],qa[-self.max_seq:])
+            self.user_ids.append(user_id) # user_ids indexes
 
     def __len__(self):
         return len(self.user_ids)
 
     def __getitem__(self, index):
-        user_id = self.user_ids[index]
-        q_, qa_ = self.samples[user_id]
+        user_id = self.user_ids[index] # Pick a user
+        q_, qa_ = self.samples[user_id] # Pick full sequence for user
         seq_len = len(q_)
 
         q = np.zeros(self.max_seq, dtype=int)
         qa = np.zeros(self.max_seq, dtype=int)
-        if seq_len >= self.max_seq:
-            q[:] = q_[-self.max_seq:]
-            qa[:] = qa_[-self.max_seq:]
-        else:
-            q[-seq_len:] = q_
-            qa[-seq_len:] = qa_
-        
-        target_id = q[1:]
-        label = qa[1:]
 
-        x = np.zeros(self.max_seq-1, dtype=int)
-        x = q[:-1].copy()
-        x += (qa[:-1] == 1) * self.n_skill
+        if seq_len >= self.max_seq:
+            if self.subset == "train":
+                if seq_len > self.max_seq:
+                    random_start_index = np.random.randint(seq_len - self.max_seq)
+                    q[:] = q_[random_start_index:random_start_index + self.max_seq] # Pick 100 questions from a random index
+                    qa[:] = qa_[random_start_index:random_start_index + self.max_seq] # Pick 100 answers from a random index
+                else:
+                    q[:] = q_[-self.max_seq:]
+                    qa[:] = qa_[-self.max_seq:]
+            else:
+                q[:] = q_[-self.max_seq:] # Pick last 100 questions
+                qa[:] = qa_[-self.max_seq:] # Pick last 100 answers
+        else:
+            q[-seq_len:] = q_ # Pick last N question with zero padding
+            qa[-seq_len:] = qa_ # Pick last N answers with zero padding        
+                
+        target_id = q[1:] # Ignore first item 1 to 99
+        label = qa[1:] # Ignore first item 1 to 99
+
+        # x = np.zeros(self.max_seq-1, dtype=int)
+        x = q[:-1].copy() # 0 to 98
+        x += (qa[:-1] == 1) * self.n_skill # y = et + rt x E
 
         return x, target_id, label
+
+
+# class SAKTDataset(Dataset):
+#     def __init__(self, group, n_skill, max_seq=MAX_SEQ): #HDKIM 100
+#         super(SAKTDataset, self).__init__()
+#         self.max_seq = max_seq
+#         self.n_skill = n_skill
+#         self.samples = group
+        
+# #         self.user_ids = [x for x in group.index]
+#         self.user_ids = []
+#         for user_id in group.index:
+#             q, qa = group[user_id]
+#             if len(q) < 5: #HDKIM 10
+#                 continue
+#             self.user_ids.append(user_id)
+            
+#             #HDKIM Memory reduction
+#             if len(q)>self.max_seq:
+#                 group[user_id] = (q[-self.max_seq:],qa[-self.max_seq:])
+
+#     def __len__(self):
+#         return len(self.user_ids)
+
+#     def __getitem__(self, index):
+#         user_id = self.user_ids[index]
+#         q_, qa_ = self.samples[user_id]
+#         seq_len = len(q_)
+
+#         q = np.zeros(self.max_seq, dtype=int)
+#         qa = np.zeros(self.max_seq, dtype=int)
+#         if seq_len >= self.max_seq:
+#             q[:] = q_[-self.max_seq:]
+#             qa[:] = qa_[-self.max_seq:]
+#         else:
+#             q[-seq_len:] = q_
+#             qa[-seq_len:] = qa_
+        
+#         target_id = q[1:]
+#         label = qa[1:]
+
+#         x = np.zeros(self.max_seq-1, dtype=int)
+#         x = q[:-1].copy()
+#         x += (qa[:-1] == 1) * self.n_skill
+
+#         return x, target_id, label
 
 class FFN(nn.Module):
     def __init__(self, state_size=256):
@@ -391,15 +391,15 @@ class conf:
     else:
         map_location='cpu'
 # %%
-# train_dataset = SAKTDataset(train_group, n_skill, subset="train")
-train_dataset = SAKTDataset(train_group, n_skill)
+train_dataset = SAKTDataset(train_group, n_skill, subset="train")
+# train_dataset = SAKTDataset(train_group, n_skill)
 train_dataloader = DataLoader(train_dataset, 
                               batch_size=conf.BATCH_SIZE, 
                               shuffle=True, 
                               num_workers=conf.WORKERS)
 
-# valid_dataset = SAKTDataset(valid_group, n_skill, subset="valid")
-valid_dataset = SAKTDataset(valid_group, n_skill)
+valid_dataset = SAKTDataset(valid_group, n_skill, subset="valid")
+# valid_dataset = SAKTDataset(valid_group, n_skill)
 valid_dataloader = DataLoader(valid_dataset, 
                               batch_size=conf.VAL_BATCH_SIZE, 
                               shuffle=False, 
@@ -469,54 +469,6 @@ for idx, item in enumerate(train_dataloader):
 # acc = num_corrects / num_total
 # auc = roc_auc_score(labels, outs)
 # loss = np.mean(train_loss)
-
-
-
-# %%
-epochs = 60
-auc_max = -np.inf
-history = []
-
-for epoch in range(1, epochs+1):
-    train_loss, train_acc, train_auc = train_epoch(model, train_dataloader, optimizer, criterion, device)
-    valid_loss, valid_acc, valid_auc = valid_epoch(model, valid_dataloader, criterion, device)
-    print(f"\nEpoch #{epoch}, train_loss - {train_loss:.2f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
-    print(f"Epoch #{epoch}, valid_loss - {valid_loss:.2f} acc - {valid_acc:.4f} auc - {valid_auc:.4f}")
-    lr = optimizer.param_groups[0]['lr']
-    history.append({"epoch":epoch, "lr": lr, 
-                    **{"train_auc": train_auc, "train_acc": train_acc}, 
-                    **{"valid_auc": valid_auc, "valid_acc": valid_acc}})
-    if valid_auc > auc_max:
-        print(f"Epoch #{epoch}, Metric loss improved from {auc_max:.4f} to {valid_auc:.4f}, saving model ...")
-        auc_max = valid_auc
-        torch.save(model.state_dict(), 
-            os.path.join(MODEL_DIR, f"sakt_head_{NUM_HEAD}_fold{FOLD}_auc_{valid_auc:.4f}.pt"))
-
-if history:
-    metric = "auc"
-    # Plot training history
-
-    history_pd = pd.DataFrame(history[1:]).set_index("epoch")
-    train_history_pd = history_pd[[c for c in history_pd.columns if "train_" in c]]
-    valid_history_pd = history_pd[[c for c in history_pd.columns if "valid_" in c]]
-    lr_history_pd = history_pd[[c for c in history_pd.columns if "lr" in c]]
-    
-    fig, ax = plt.subplots(1,2, figsize=(DEFAULT_FIG_WIDTH, 6))
-    
-    t_epoch = train_history_pd["train_%s" % metric].argmin() if conf.METRIC_ == "min" else train_history_pd["train_%s" % metric].argmax()
-
-    v_epoch = valid_history_pd["valid_%s" % metric].argmin() if conf.METRIC_ == "min" else valid_history_pd["valid_%s" % metric].argmax()
-    
-    d = train_history_pd.plot(kind="line", ax=ax[0], title="Epoch: %d, Train: %.3f" % (t_epoch, train_history_pd.iloc[t_epoch,:]["train_%s" % metric]))
-    
-    d = lr_history_pd.plot(kind="line", ax=ax[0], secondary_y=True)
-    
-    d = valid_history_pd.plot(kind="line", ax=ax[1], title="Epoch: %d, Valid: %.3f" % (v_epoch, valid_history_pd.iloc[v_epoch,:]["valid_%s" % metric]))
-    
-    d = lr_history_pd.plot(kind="line", ax=ax[1], secondary_y=True)
-    
-    plt.savefig("%s/train.png" % MODEL_DIR, bbox_inches='tight')
-    plt.show()
 # %% Test
 
 class TestDataset(Dataset):
@@ -594,5 +546,3 @@ for item in test_dataloader:
 test_df['answered_correctly'] = outs
 
 test_df['answered_correctly'].hist()
-# %%
-# %%

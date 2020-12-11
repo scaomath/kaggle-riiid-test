@@ -8,16 +8,44 @@ from sklearn.metrics import roc_auc_score
 from torchsummary import summary
 from utils import *
 
+MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
+DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
+
+
+CONTENT_TYPE_ID = "content_type_id"
+CONTENT_ID = "content_id"
+TARGET = "answered_correctly"
+USER_ID = "user_id"
+TASK_CONTAINER_ID = "task_container_id"
+TIMESTAMP = "timestamp" 
+
+TRAIN_DTYPES = {TIMESTAMP: 'int64', 
+         USER_ID: 'int32', 
+         CONTENT_ID: 'int16',
+         CONTENT_TYPE_ID: 'bool',
+         TARGET:'int8'}
+
+TEST_DTYPES = {
+    # 'row_id': np.uint32,
+    'timestamp': np.int64,
+    'user_id': np.int32,
+    'content_id': np.int16,
+    'content_type_id': np.int8,
+    'task_container_id': np.int16,
+    'prior_question_elapsed_time': np.float32,
+    'prior_question_had_explanation': 'boolean'
+}
 
 class conf:
-    TQDM_INT = 8
     METRIC_ = "max"
-    WORKERS = 10 # 0
-    BATCH_SIZE = 2048
+    TQDM_INT = 10
+    WORKERS = 8 # 0
+    BATCH_SIZE = 512
+    VAL_BATCH_SIZE = 4096
     lr = 1e-3
-    D_MODEL = 128
-    NUM_HEAD = 8
-    N_SKILLS = 13523 # len(skills)
+    NUM_EMBED = 160
+    NUM_HEADS = 10
+    NUM_SKILLS = 13523 # len(skills)
 
     if torch.cuda.is_available():
         map_location = lambda storage, loc: storage.cuda()
@@ -76,8 +104,50 @@ class SAKTDataset(Dataset):
 
         return x, target_id, label
 
+class TestDataset(Dataset):
+    def __init__(self, samples, test_df, skills, max_seq=100):
+        super(TestDataset, self).__init__()
+        self.samples = samples
+        self.user_ids = [x for x in test_df["user_id"].unique()]
+        self.test_df = test_df
+        self.skills = skills
+        self.n_skill = len(skills)
+        self.max_seq = max_seq
+
+    def __len__(self):
+        return self.test_df.shape[0]
+
+    def __getitem__(self, index):
+        test_info = self.test_df.iloc[index]
+
+        user_id = test_info["user_id"]
+        target_id = test_info["content_id"]
+
+        q = np.zeros(self.max_seq, dtype=int)
+        qa = np.zeros(self.max_seq, dtype=int)
+
+        if user_id in self.samples.index:
+            q_, qa_ = self.samples[user_id]
+            
+            seq_len = len(q_)
+
+            if seq_len >= self.max_seq:
+                q = q_[-self.max_seq:]
+                qa = qa_[-self.max_seq:]
+            else:
+                q[-seq_len:] = q_
+                qa[-seq_len:] = qa_          
+        
+        x = np.zeros(self.max_seq-1, dtype=int)
+        x = q[1:].copy()
+        x += (qa[1:] == 1) * self.n_skill
+        
+        questions = np.append(q[2:], [target_id])
+        
+        return x, questions
+
 class FFN(nn.Module):
-    def __init__(self, state_size=200):
+    def __init__(self, state_size=256):
         super(FFN, self).__init__()
         self.state_size = state_size
 
@@ -88,6 +158,7 @@ class FFN(nn.Module):
     
     def forward(self, x):
         x = self.lr1(x)
+        x = self.dropout(x)
         x = self.relu(x)
         x = self.lr2(x)
         return self.dropout(x)
@@ -98,7 +169,7 @@ def future_mask(seq_length):
 
 
 class SAKTModel(nn.Module):
-    def __init__(self, n_skill, max_seq=100, embed_dim=128):
+    def __init__(self, n_skill, max_seq=100, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS):
         super(SAKTModel, self).__init__()
         self.n_skill = n_skill
         self.embed_dim = embed_dim
@@ -108,7 +179,7 @@ class SAKTModel(nn.Module):
         self.pos_embedding = nn.Embedding(max_seq-1, embed_dim)
         self.e_embedding = nn.Embedding(n_skill+1, embed_dim)
 
-        self.multi_att = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=conf.NUM_HEAD, dropout=0.3)
+        self.multi_att = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.3)
 
         self.dropout = nn.Dropout(0.3)
         self.layer_normal = nn.LayerNorm(embed_dim) 
@@ -158,7 +229,7 @@ def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
 
             optim.zero_grad()
             output, atten_weight = model(x, target_id)
-            print(f'X shape: {x.shape}, target_id shape: {target_id.shape}')
+            # print(f'X shape: {x.shape}, target_id shape: {target_id.shape}')
             loss = criterion(output, label)
             loss.backward()
             optim.step()
@@ -222,8 +293,29 @@ def valid_epoch(model, valid_iterator, criterion, device="cuda"):
     return loss, acc, auc
 
 
+def load_sakt_model(model_file, device='cuda'):
+    # creating the model and load the weights
+    model = SAKTModel(conf.NUM_SKILLS, embed_dim=conf.NUM_EMBED)
+    model = model.to(device)
+    model.load_state_dict(torch.load(model_file, map_location=device))
+
+    return model
+
+def find_sakt_model(model_dir=MODEL_DIR, model_file=None):
+    # find the best AUC model, or a given model
+    if model_file is None:
+        try:
+            model_files = find_files('sakt', model_dir)
+            tmp = [s.rsplit('.')[-2] for s in model_files]
+            model_file = model_files[argmax(tmp)]
+        except:
+            FileExistsError('model file not found')
+    return model_file
+
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = SAKTModel(conf.N_SKILLS, embed_dim=conf.D_MODEL)
+    model = SAKTModel(conf.NUM_SKILLS, embed_dim=conf.NUM_EMBED)
     num_params = get_num_params(model)
     print(f"Params number: {num_params}")
+    model_file = find_sakt_model()
+    if model_file is not None: model = load_sakt_model(model_file)
