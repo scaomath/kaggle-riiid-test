@@ -83,7 +83,7 @@ train_df = data_df.copy()
 start = time()
 train_df[PRIOR_QUESTION_TIME].fillna(conf.FILLNA_VAL, inplace=True) 
     # FILLNA_VAL different than all current values
-train_df[PRIOR_QUESTION_TIME] = round(train_df[PRIOR_QUESTION_TIME] / 1000, ndigits=1)
+train_df[PRIOR_QUESTION_TIME] = round(train_df[PRIOR_QUESTION_TIME] / TIME_SCALING)
 train_df[PRIOR_QUESTION_TIME] = train_df[PRIOR_QUESTION_TIME].replace(np.inf, conf.FILLNA_VAL).astype(np.float16) 
 train_df[PRIOR_QUESTION_EXPLAIN] = train_df[PRIOR_QUESTION_EXPLAIN].astype(np.float16).fillna(-1).astype(np.int8)
 
@@ -124,7 +124,9 @@ item = train_dataset.__getitem__(5)
 
 print("x", len(item[0]), item[0], '\n\n')
 print("target_id", len(item[1]), item[1] , '\n\n')
-print("label", len(item[2]), item[2])
+print("label", len(item[2]), item[2], '\n\n')
+print("prior question time", len(item[3]), item[3],  '\n\n')
+print("prior question explained", len(item[4]), item[4])
 
 # %%
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

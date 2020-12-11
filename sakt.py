@@ -19,6 +19,7 @@ CONTENT_ID = "content_id"
 TARGET = "answered_correctly"
 USER_ID = "user_id"
 PRIOR_QUESTION_TIME = 'prior_question_elapsed_time'
+TIME_SCALING = 1000
 PRIOR_QUESTION_EXPLAIN = 'prior_question_had_explanation'
 TASK_CONTAINER_ID = "task_container_id"
 TIMESTAMP = "timestamp" 
