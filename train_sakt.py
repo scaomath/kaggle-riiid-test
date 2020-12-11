@@ -13,6 +13,8 @@ import torch.nn as nn
 import torch.nn.utils.rnn as rnn_utils
 from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingWarmRestarts
 
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -52,14 +54,10 @@ MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
 DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
 STAGE = "stage1"
 FOLD = 1
-NUM_HEADS = 10
-NUM_EMBED = 120
-MAX_SEQ = 100
-N_TAIL = 100
 
 TRAIN = True
-EPOCHS = 40
-
+EPOCHS = 60
+LEARNING_RATE = 1e-3
 
 #%%
 train_df = pd.read_parquet(DATA_DIR+'cv2_train.parquet')
@@ -113,13 +111,17 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 model = SAKTModel(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS)
 # optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.99, weight_decay=0.005)
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, threshold=0.0001)
+# optimizer = HNAGOptimizer(model.parameters(), lr=1e-3) 
 criterion = nn.BCEWithLogitsLoss()
 
 model.to(device)
 criterion.to(device)
 num_params = get_num_params(model)
-print(f"Num of params: {num_params}")
+print(f"# heads  : {conf.NUM_HEADS}")
+print(f"# embed  : {conf.NUM_EMBED}")
+print(f"# params : {num_params}")
 # %%
 
 if TRAIN:
@@ -129,33 +131,49 @@ if TRAIN:
 
     print("\n\nTraining...:")
     for epoch in range(1, EPOCHS+1):
+
+        if epoch == 10:
+            optimizer = torch.optim.Adam(model.parameters(), lr=0.1*LEARNING_RATE)
+        elif epoch == 20:
+            optimizer = torch.optim.Adam(model.parameters(), lr=0.5*LEARNING_RATE)
+        elif epoch == 25:
+            optimizer = torch.optim.Adam(model.parameters(), lr=0.1*LEARNING_RATE)
+        elif epoch == 35:
+            optimizer = torch.optim.Adam(model.parameters(), lr=0.5*LEARNING_RATE)
+        elif epoch == 40:
+            optimizer = torch.optim.Adam(model.parameters(), lr=0.1*LEARNING_RATE)
+
         train_loss, train_acc, train_auc = train_epoch(model, train_loader, optimizer, criterion)
         valid_loss, valid_acc, valid_auc = valid_epoch(model, val_loader, criterion)
 
         print(f"\n\n[Epoch {epoch}/{EPOCHS}]")
-        print(f"\nTrain: loss - {train_loss:.2f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
-        print(f"\nValid: loss - {valid_loss:.2f} acc - {valid_acc:.4f} auc - {valid_auc:.4f}")
+        print(f"Train: loss - {train_loss:.2f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
+        print(f"Valid: loss - {valid_loss:.2f} acc - {valid_acc:.4f} auc - {valid_auc:.4f}")
         lr = optimizer.param_groups[0]['lr']
         history.append({"epoch":epoch, "lr": lr, 
                         **{"train_auc": train_auc, "train_acc": train_acc}, 
                         **{"valid_auc": valid_auc, "valid_acc": valid_acc}})
         
         if valid_auc > auc_max:
-            print(f"[Epoch {epoch}/{EPOCHS}] auc improved from {auc_max:.4f} to {valid_auc:.4f}") 
-            print("saving model ...")
+            print(f"Epoch {epoch}: auc improved from {auc_max:.4f} to {valid_auc:.4f}") 
+            print("saving model ...\n\n")
             auc_max = valid_auc
             torch.save(model.state_dict(), 
             os.path.join(MODEL_DIR, f"sakt_head_{conf.NUM_HEADS}_embed_{conf.NUM_EMBED}_auc_{valid_auc:.4f}.pt"))
         
-        with open(DATA_DIR+f'history.pickle', 'wb') as handle:
-            pickle.dump(history, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        
 
-        if epoch % 10 == 0:
-            conf.BATCH_SIZE *= 2
-            train_loader = DataLoader(train_dataset, 
-                                      batch_size=conf.BATCH_SIZE, 
-                                      shuffle=True, 
-                                      num_workers=conf.WORKERS)
+        # if epoch % 10 == 0:
+        #     conf.BATCH_SIZE *= 2
+        #     train_loader = DataLoader(train_dataset, 
+        #                               batch_size=conf.BATCH_SIZE, 
+        #                               shuffle=True, 
+        #                               num_workers=conf.WORKERS)
+    # model, history = run_train(model, train_loader, val_loader, 
+    #                            optimizer, scheduler, criterion, 
+    #                            epochs=EPOCHS, device="cuda")
+    with open(DATA_DIR+f'history.pickle', 'wb') as handle:
+        pickle.dump(history, handle, protocol=pickle.HIGHEST_PROTOCOL)
 else:
     tqdm.write("\nLoading state_dict...\n")
     model_file = find_sakt_model()
@@ -167,3 +185,4 @@ else:
 '''
 Mock test in iter_env_sakt
 '''
+# %%

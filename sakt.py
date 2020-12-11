@@ -6,6 +6,8 @@ from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import roc_auc_score
 from torchsummary import summary
+from torch.optim import Optimizer
+
 from utils import *
 
 MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
@@ -18,6 +20,7 @@ TARGET = "answered_correctly"
 USER_ID = "user_id"
 TASK_CONTAINER_ID = "task_container_id"
 TIMESTAMP = "timestamp" 
+ROW_ID = 'row_id'
 
 TRAIN_DTYPES = {TIMESTAMP: 'int64', 
          USER_ID: 'int32', 
@@ -38,14 +41,15 @@ TEST_DTYPES = {
 
 class conf:
     METRIC_ = "max"
-    TQDM_INT = 10
+    TQDM_INT = 8
     WORKERS = 8 # 0
-    BATCH_SIZE = 512
+    BATCH_SIZE = 2048
     VAL_BATCH_SIZE = 4096
-    lr = 1e-3
+    LEARNING_RATE = 1e-3
     NUM_EMBED = 160
-    NUM_HEADS = 10
+    NUM_HEADS = 16
     NUM_SKILLS = 13523 # len(skills)
+    MAX_SEQ = 100
 
     if torch.cuda.is_available():
         map_location = lambda storage, loc: storage.cuda()
@@ -53,7 +57,7 @@ class conf:
         map_location='cpu'
 
 class SAKTDataset(Dataset):
-    def __init__(self, group, n_skill, subset="train", max_seq=100):
+    def __init__(self, group, n_skill, subset="train", max_seq=conf.MAX_SEQ):
         super(SAKTDataset, self).__init__()
         self.max_seq = max_seq
         self.n_skill = n_skill # 13523
@@ -105,13 +109,12 @@ class SAKTDataset(Dataset):
         return x, target_id, label
 
 class TestDataset(Dataset):
-    def __init__(self, samples, test_df, skills, max_seq=100):
+    def __init__(self, samples, test_df, n_skills, max_seq=conf.MAX_SEQ):
         super(TestDataset, self).__init__()
         self.samples = samples
         self.user_ids = [x for x in test_df["user_id"].unique()]
         self.test_df = test_df
-        self.skills = skills
-        self.n_skill = len(skills)
+        self.n_skill = n_skills
         self.max_seq = max_seq
 
     def __len__(self):
@@ -147,19 +150,21 @@ class TestDataset(Dataset):
         return x, questions
 
 class FFN(nn.Module):
-    def __init__(self, state_size=256):
+    def __init__(self, state_size=200):
         super(FFN, self).__init__()
         self.state_size = state_size
 
         self.lr1 = nn.Linear(state_size, state_size)
         self.relu = nn.ReLU()
+        self.lrelu = nn.LeakyReLU()
         self.lr2 = nn.Linear(state_size, state_size)
         self.dropout = nn.Dropout(0.2)
     
     def forward(self, x):
         x = self.lr1(x)
-        x = self.dropout(x)
+        # x = self.dropout(x)
         x = self.relu(x)
+        # x = self.lrelu(x)
         x = self.lr2(x)
         return self.dropout(x)
 
@@ -169,7 +174,7 @@ def future_mask(seq_length):
 
 
 class SAKTModel(nn.Module):
-    def __init__(self, n_skill, max_seq=100, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS):
+    def __init__(self, n_skill, max_seq=conf.MAX_SEQ, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS):
         super(SAKTModel, self).__init__()
         self.n_skill = n_skill
         self.embed_dim = embed_dim
@@ -205,7 +210,8 @@ class SAKTModel(nn.Module):
         att_output = att_output.permute(1, 0, 2) # att_output: [s_len, bs, embed] => [bs, s_len, embed]
 
         x = self.ffn(att_output)
-        x = self.layer_normal(x + att_output)
+        x = self.layer_normal(x + att_output) # original
+        # x = self.layer_normal(x) + att_output # modified, seems not changing much
         x = self.pred(x)
 
         return x.squeeze(-1), att_weight
@@ -247,7 +253,7 @@ def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
             outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
 
             if idx % conf.TQDM_INT == 0:
-                pbar.set_description(f'loss - {train_loss[-1]:.4f}')
+                pbar.set_description(f'train loss - {train_loss[-1]:.4f}')
                 pbar.update(conf.TQDM_INT)
     
     acc = num_corrects / num_total
@@ -293,6 +299,80 @@ def valid_epoch(model, valid_iterator, criterion, device="cuda"):
     return loss, acc, auc
 
 
+def run_train(model, train_iterator, valid_iterator, optim, scheduler, criterion, 
+              epochs=40, device="cuda"):
+    history = []
+    auc_max = -np.inf
+    val_loss = -np.inf
+
+    for epoch in range(1, epochs+1):
+
+        tqdm.write(f"\n\n[Epoch {epoch}/{epochs}]")
+        model.train()
+
+        train_loss = []
+        num_corrects = 0
+        num_total = 0
+        labels = []
+        outs = []
+
+        len_dataset = len(train_iterator)
+
+        with tqdm(total=len_dataset) as pbar:
+            for idx, item in enumerate(train_iterator): 
+                x = item[0].to(device).long()
+                target_id = item[1].to(device).long()
+                label = item[2].to(device).float()
+
+                optim.zero_grad()
+                output, atten_weight = model(x, target_id)
+                # print(f'X shape: {x.shape}, target_id shape: {target_id.shape}')
+                loss = criterion(output, label)
+                loss.backward()
+                if val_loss > 0:
+                    optim.step()
+                    scheduler.step(val_loss)
+                else:
+                    optim.step()
+                train_loss.append(loss.item())
+
+                output = output[:, -1]
+                label = label[:, -1] 
+                pred = (torch.sigmoid(output) >= 0.5).long()
+                
+                num_corrects += (pred == label).sum().item()
+                num_total += len(label)
+
+                labels.extend(label.view(-1).data.cpu().numpy())
+                #outs.extend(output.view(-1).data.cpu().numpy())
+                outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
+
+                if idx % conf.TQDM_INT == 0:
+                    pbar.set_description(f'train loss - {train_loss[-1]:.4f} val loss - {val_loss:.4f}')
+                    pbar.update(conf.TQDM_INT)
+        
+        train_acc = num_corrects / num_total
+        train_auc = roc_auc_score(labels, outs)
+        train_loss = np.mean(train_loss)
+
+        tqdm.write(f"Train: loss - {train_loss:.2f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
+
+        val_loss, val_acc, val_auc = valid_epoch(model, valid_iterator, criterion, device=device)
+        tqdm.write(f"Valid: loss - {val_loss:.2f} acc - {val_acc:.4f} auc - {val_auc:.4f}")
+
+        lr = optim.param_groups[0]['lr']
+        history.append({"epoch":epoch, "lr": lr, 
+                        **{"train_auc": train_auc, "train_acc": train_acc}, 
+                        **{"valid_auc": val_auc, "valid_acc": val_acc}})
+        
+        if val_auc > auc_max:
+            print(f"[Epoch {epoch}/{epochs}] auc improved from {auc_max:.4f} to {val_auc:.4f}") 
+            auc_max = val_auc
+            torch.save(model.state_dict(), 
+            os.path.join(MODEL_DIR, f"sakt_head_{conf.NUM_HEADS}_embed_{conf.NUM_EMBED}_auc_{val_auc:.4f}.pt"))
+    return model, history
+
+
 def load_sakt_model(model_file, device='cuda'):
     # creating the model and load the weights
     model = SAKTModel(conf.NUM_SKILLS, embed_dim=conf.NUM_EMBED)
@@ -312,10 +392,109 @@ def find_sakt_model(model_dir=MODEL_DIR, model_file=None):
             FileExistsError('model file not found')
     return model_file
 
+
+class HNAGOptimizer(Optimizer):
+    """
+    Implements a Hessian-driven Nesterov Accelerated Gradient Algorithm.
+    First order optimization methods based on Hessian-driven Nesterov accelerated gradient flow, 
+    https://arxiv.org/abs/1912.09276
+    only 1 gradient evaluation per iteration in this version
+
+    Args:
+        params (iterable): iterable of parameters to optimize or dicts defining
+            parameter groups
+        lr (float): learning rate
+        momentum (float, optional): momentum factor (default: 0)
+        weight_decay (float, optional): weight decay (L2 penalty) (default: 0)
+        mu (float, optional): estimated convexity of the loss (default: 0.5)
+        hessian(bool, optional): enables Hessian-driven momentum (default: True)
+        
+    Example:
+        >>> optimizer = HNAGOptimizer(model.parameters(), lr=0.1, momentum=0.9)
+        >>> optimizer.zero_grad()
+        >>> loss_fn(model(input), target).backward()
+        >>> optimizer.step()
+    """
+
+    def __init__(self, params, lr=1e-3, mu=0.5,
+                       weight_decay=0, hessian=True):
+        defaults = dict(lr=lr, 
+                        mu=mu,
+                        weight_decay=weight_decay, 
+                        hessian=hessian)
+        if hessian and (lr is None):
+            raise ValueError("Hessian-driven method requires a specific learning rate.")
+        super(HNAGOptimizer, self).__init__(params, defaults)
+        self._params = self.param_groups[0]['params']
+        self._numel_cache = None
+
+    def step(self, closure=None):
+        """Performs a single optimization step.
+        Arguments:
+            closure (callable, optional): 
+                A closure that reevaluates the model
+                and returns the loss.
+        """
+        loss = None
+
+        
+        if closure is not None:
+            # reserved for H-Nag to evaluate the model before next iteration
+            loss = closure()
+            # print(loss.item())
+
+        for _, group in enumerate(self.param_groups):
+            # print(self.param_groups[0])
+            weight_decay = group['weight_decay']
+            mu = group['mu']
+            lr = group['lr']
+
+            for _, p in enumerate(group['params']):
+                if p.grad is None:
+                    continue
+
+                grad_x = p.grad.data.detach()
+                if group['weight_decay'] != 0:
+                    grad_x = grad_x.add(weight_decay, p.data)
+                
+                param_state = self.state[p]
+
+                x = p.data.detach()
+                # State initialization
+                if len(param_state) == 0:
+                    param_state['step'] = 0 # for debugging
+                    param_state['v'] = torch.zeros_like(p.data)
+                    param_state['y'] = torch.zeros_like(p.data)
+
+                    alpha  = (2*lr)**(0.5) # approximated root
+                    if not 0 < alpha < 1:
+                        raise ValueError("alpha has to be in (0,1).")
+                    param_state['alpha'] = alpha
+
+                v = param_state['v']
+                y = param_state['y']
+                alpha = param_state['alpha']
+
+                v_new = (alpha*v + 2*lr*x - 2*lr*grad_x/mu)/(alpha + 2*lr)
+
+                y_new = x - 2*lr*grad_x/mu
+                alpha_new = ((alpha**2 + 2*alpha*lr)/(1+alpha))**(0.5)
+                x = (y_new + alpha_new*v_new)/(1+alpha_new)
+
+
+                p.data = x
+                param_state['alpha'] = alpha_new
+                param_state['v'] = v_new
+                param_state['y'] = y_new
+
+        return loss
+
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = SAKTModel(conf.NUM_SKILLS, embed_dim=conf.NUM_EMBED)
     num_params = get_num_params(model)
     print(f"Params number: {num_params}")
     model_file = find_sakt_model()
-    if model_file is not None: model = load_sakt_model(model_file)
+    if model_file is not None: 
+        model = load_sakt_model(model_file)
+        print(f"Loaded {model_file}.")
