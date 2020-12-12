@@ -1,5 +1,6 @@
 #%%
 import os
+import sys
 import numpy as np
 import pandas as pd
 import dask.dataframe as dd
@@ -20,6 +21,12 @@ from torch.autograd import Variable
 from torchsummary import summary
 
 from sklearn.metrics import roc_auc_score
+
+HOME =  "/home/scao/Documents/kaggle-riiid-test/"
+MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
+DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
+
+sys.path.append(HOME)
 from ..utils import *
 from transformer import *
 # %%
@@ -58,10 +65,8 @@ TEST_DTYPES = {
 }
 
 
-DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
-FOLD = 1
-MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
 
+FOLD = 1
 NUM_HEAD = 10 # number of attentions
 LAST_N = 100 
 # this parameter denotes how many last seen content_ids I am going to consider <aka the max_seq_len or the window size>.

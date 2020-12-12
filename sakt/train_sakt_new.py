@@ -86,7 +86,7 @@ if PREPROCESS:
     train_df[PRIOR_QUESTION_TIME].fillna(conf.FILLNA_VAL, inplace=True) 
         # FILLNA_VAL different than all current values
     train_df[PRIOR_QUESTION_TIME] = round(train_df[PRIOR_QUESTION_TIME] / TIME_SCALING)
-    train_df[PRIOR_QUESTION_EXPLAIN] = train_df[PRIOR_QUESTION_EXPLAIN].astype(np.float16).fillna(2).astype(np.int8)
+    train_df[PRIOR_QUESTION_EXPLAIN] = train_df[PRIOR_QUESTION_EXPLAIN].astype(np.float16).fillna(0).astype(np.int8)
 
     train_df = train_df[train_df[CONTENT_TYPE_ID] == False]
     train_df = train_df.sort_values([TIMESTAMP], ascending=True).reset_index(drop = True)

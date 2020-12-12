@@ -51,7 +51,7 @@ TEST_DTYPES = {
 
 class conf:
     METRIC_ = "max"
-    FILLNA_VAL = 100
+    FILLNA_VAL = 14_000 # for prior question elapsed time, rounded average in train
     TQDM_INT = 8
     WORKERS = 8 # 0
     BATCH_SIZE = 2048
@@ -368,8 +368,10 @@ class SAKTModelNew(nn.Module):
         self.embedding = nn.Embedding(2*n_skill+1, embed_dim)
         self.pos_embedding = nn.Embedding(max_seq-1, embed_dim)
         self.e_embedding = nn.Embedding(n_skill+1, embed_dim)
-        self.pqt_embedding = nn.Embedding(conf.NUM_TIME+1, embed_dim) # embedding of prior question time
-        self.pa_embedding = nn.Embedding(3+1, embed_dim) # embedding of priori question answered
+        # embedding of prior question time
+        self.pqt_embedding = nn.Embedding(conf.NUM_TIME+1, embed_dim) 
+        # embedding of priori question answered
+        self.pa_embedding = nn.Embedding(2+1, embed_dim) 
 
         self.multi_att = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.2)
 
@@ -383,6 +385,15 @@ class SAKTModelNew(nn.Module):
         self.scaling = conf.SCALING
     
     def forward(self, x, question_ids, prior_question_time=None, prior_question_explain=None):
+        '''
+        x: encoded performance on all previous questions for a user
+        pos_id: ???
+
+        Attention:
+        query: e
+        key: x
+        value: x
+        '''
         device = x.device        
         x = self.embedding(x)
         pos_id = torch.arange(x.size(1)).unsqueeze(0).to(device)
@@ -390,14 +401,16 @@ class SAKTModelNew(nn.Module):
 
         pq_x = self.pqt_embedding(prior_question_time)
         pa_x = self.pa_embedding(prior_question_explain)
-        x += pos_x 
+
+        x += pos_x + pq_x + pa_x
+
 
         e = self.e_embedding(question_ids)
-        e += pq_x + pa_x
 
         x = x.permute(1, 0, 2) # x: [bs, s_len, embed] => [s_len, bs, embed]
         e = e.permute(1, 0, 2)
         att_mask = future_mask(x.size(0)).to(device)
+
         att_output, att_weight = self.multi_att(e, x, x, attn_mask=att_mask)
         att_output = self.layer_normal(att_output + e)
         att_output = att_output.permute(1, 0, 2) # att_output: [s_len, bs, embed] => [bs, s_len, embed]

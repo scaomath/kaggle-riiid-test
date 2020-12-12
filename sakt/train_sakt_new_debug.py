@@ -86,7 +86,7 @@ train_df[PRIOR_QUESTION_TIME].fillna(conf.FILLNA_VAL, inplace=True)
     # FILLNA_VAL different than all current values
 train_df[PRIOR_QUESTION_TIME] = round(train_df[PRIOR_QUESTION_TIME] / TIME_SCALING)
 # train_df[PRIOR_QUESTION_TIME] = train_df[PRIOR_QUESTION_TIME].replace(np.inf, 301).astype(np.int16) 
-train_df[PRIOR_QUESTION_EXPLAIN] = train_df[PRIOR_QUESTION_EXPLAIN].astype(np.float16).fillna(2).astype(np.int8)
+train_df[PRIOR_QUESTION_EXPLAIN] = train_df[PRIOR_QUESTION_EXPLAIN].astype(np.float16).fillna(0).astype(np.int8)
 
 train_df = train_df[train_df[CONTENT_TYPE_ID] == False]
 train_df = train_df.sort_values([TIMESTAMP], ascending=True).reset_index(drop = True)
@@ -114,6 +114,82 @@ print(f"Valid by user:  {len(valid_group)}")
 print(f"Train by user:  {len(train_group)}\n\n")
 
 # %%
+
+class SAKTDatasetNew(Dataset):
+    def __init__(self, group, n_skill, subset="train", max_seq=conf.MAX_SEQ):
+        super(SAKTDatasetNew, self).__init__()
+        self.max_seq = max_seq
+        self.n_skill = n_skill # 13523
+        self.samples = group
+        self.subset = subset
+        
+        # self.user_ids = [x for x in group.index]
+        self.user_ids = []
+        for user_id in group.index:
+            '''
+            q: question_id
+            pqt: previous question time
+            pqe: previous question explain or not
+            qa: question answer correct or not
+            '''
+            q, pqt, pqe, qa = group[user_id] 
+            if len(q) < 2: # 5 interactions minimum
+                continue
+            self.user_ids.append(user_id) # user_ids indexes
+
+    def __len__(self):
+        return len(self.user_ids)
+
+    def __getitem__(self, index):
+        user_id = self.user_ids[index] # Pick a user
+        q_, pqt_, pqe_, qa_ = self.samples[user_id] # Pick full sequence for user
+        seq_len = len(q_)
+
+        q = np.zeros(self.max_seq, dtype=int)
+        pqt = np.zeros(self.max_seq, dtype=int)
+        pqe = np.zeros(self.max_seq, dtype=int)
+        qa = np.zeros(self.max_seq, dtype=int)
+
+        if seq_len >= self.max_seq:
+            if self.subset == "train":
+                if seq_len > self.max_seq:
+                    random_start_index = np.random.randint(seq_len - self.max_seq)
+                    '''
+                    Pick 100 questions, answers, prior question time, 
+                    priori question explain from a random index
+                    '''
+                    q[:] = q_[random_start_index:random_start_index + self.max_seq] 
+                    qa[:] = qa_[random_start_index:random_start_index + self.max_seq] 
+                    pqt[:] = pqt_[random_start_index:random_start_index + self.max_seq] 
+                    pqe[:] = pqe_[random_start_index:random_start_index + self.max_seq] 
+                else:
+                    q[:] = q_[-self.max_seq:]
+                    qa[:] = qa_[-self.max_seq:]
+                    pqt[:] = pqt_[-self.max_seq:] 
+                    pqe[:] = pqe_[-self.max_seq:]
+            else:
+                q[:] = q_[-self.max_seq:] # Pick last 100 questions
+                qa[:] = qa_[-self.max_seq:] # Pick last 100 answers
+                pqt[:] = pqt_[-self.max_seq:] 
+                pqe[:] = pqe_[-self.max_seq:]
+        else:
+            q[-seq_len:] = q_ # Pick last N question with zero padding
+            qa[-seq_len:] = qa_ # Pick last N answers with zero padding
+            pqt[-seq_len:] = pqt_
+            pqe[-seq_len:] = pqe_      
+                
+        target_id = q[1:] # Ignore first item 1 to 99
+        label = qa[1:] # Ignore first item 1 to 99
+        prior_q_time = pqt[1:]
+        prior_q_explain = pqe[1:]
+
+
+        # x = np.zeros(self.max_seq-1, dtype=int)
+        x = q[:-1].copy() # 0 to 98
+        x += (qa[:-1] == 1) * self.n_skill # y = et + rt x E
+
+        return x, target_id,  label,  prior_q_time,  prior_q_explain
+
 train_dataset = SAKTDatasetNew(train_group, n_skill, subset="train")
 valid_dataset = SAKTDatasetNew(valid_group, n_skill, subset="valid")
 # train_dataset = SAKTDataset(train_group, n_skill, subset="train")
