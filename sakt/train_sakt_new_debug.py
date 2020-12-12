@@ -65,7 +65,7 @@ TRAIN = True
 PREPROCESS = True
 EPOCHS = 60
 LEARNING_RATE = 1e-3
-NROWS_TRAIN = 5_000_000
+NROWS_TRAIN = 10_000_000
 
 
 #%%
@@ -85,8 +85,8 @@ start = time()
 train_df[PRIOR_QUESTION_TIME].fillna(conf.FILLNA_VAL, inplace=True) 
     # FILLNA_VAL different than all current values
 train_df[PRIOR_QUESTION_TIME] = round(train_df[PRIOR_QUESTION_TIME] / TIME_SCALING)
-train_df[PRIOR_QUESTION_TIME] = train_df[PRIOR_QUESTION_TIME].replace(np.inf, conf.FILLNA_VAL).astype(np.int16) 
-train_df[PRIOR_QUESTION_EXPLAIN] = train_df[PRIOR_QUESTION_EXPLAIN].astype(np.float16).fillna(-1).astype(np.int8)
+# train_df[PRIOR_QUESTION_TIME] = train_df[PRIOR_QUESTION_TIME].replace(np.inf, 301).astype(np.int16) 
+train_df[PRIOR_QUESTION_EXPLAIN] = train_df[PRIOR_QUESTION_EXPLAIN].astype(np.float16).fillna(2).astype(np.int8)
 
 train_df = train_df[train_df[CONTENT_TYPE_ID] == False]
 train_df = train_df.sort_values([TIMESTAMP], ascending=True).reset_index(drop = True)
@@ -130,7 +130,7 @@ val_loader = DataLoader(valid_dataset,
                               shuffle=False, 
                               num_workers=conf.WORKERS)
 
-item = train_dataset.__getitem__(5)
+item = train_dataset.__getitem__(10)
 
 print("x", len(item[0]), item[0], '\n\n')
 print("target_id", len(item[1]), item[1] , '\n\n')
@@ -150,7 +150,7 @@ class SAKTModelNew(nn.Module):
         self.embedding = nn.Embedding(2*n_skill+1, embed_dim)
         self.pos_embedding = nn.Embedding(max_seq-1, embed_dim)
         self.e_embedding = nn.Embedding(n_skill+1, embed_dim)
-        self.pqt_embedding = nn.Embedding(conf.NUM_TIME, embed_dim) # embedding of prior question time
+        self.pqt_embedding = nn.Embedding(conf.NUM_TIME+1, embed_dim) # embedding of prior question time
         self.pa_embedding = nn.Embedding(3+1, embed_dim) # embedding of priori question answered
 
         self.multi_att = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.2)
@@ -227,7 +227,11 @@ for idx, item in enumerate(train_loader):
     break
 
 
-# %%
+# %% 
+'''
+Bug: np.float16 and negative values in tensor
+will trigger CUDA error 59: Device-side assert triggered
+'''
 max_seq = conf.MAX_SEQ
 embed_dim = conf.NUM_EMBED
 embedding = nn.Embedding(2*n_skill+1, embed_dim).to(device)
