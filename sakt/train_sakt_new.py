@@ -63,7 +63,7 @@ FOLD = 1
 TRAIN = True
 PREPROCESS = False
 DEBUG = False
-EPOCHS = 60
+EPOCHS = 80
 LEARNING_RATE = 1e-3
 NROWS_TRAIN = 10_000_000
 
@@ -85,7 +85,7 @@ if PREPROCESS:
     start = time()
     train_df[PRIOR_QUESTION_TIME].fillna(conf.FILLNA_VAL, inplace=True) 
         # FILLNA_VAL different than all current values
-    train_df[PRIOR_QUESTION_TIME] = round(train_df[PRIOR_QUESTION_TIME] / TIME_SCALING)
+    train_df[PRIOR_QUESTION_TIME] = round(train_df[PRIOR_QUESTION_TIME] / TIME_SCALING).astype(np.int16)
     train_df[PRIOR_QUESTION_EXPLAIN] = train_df[PRIOR_QUESTION_EXPLAIN].astype(np.float16).fillna(0).astype(np.int8)
 
     train_df = train_df[train_df[CONTENT_TYPE_ID] == False]
@@ -145,7 +145,7 @@ model = SAKTModelNew(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS
 # optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.99, weight_decay=0.005)
 optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 # scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, threshold=0.0001)
-scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=15, eta_min=1e-5)
+scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, eta_min=1e-5)
 # scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=1e-4, max_lr=1e-3)
 # optimizer = HNAGOptimizer(model.parameters(), lr=1e-3) 
 criterion = nn.BCEWithLogitsLoss()
@@ -173,5 +173,5 @@ else:
     print(f"\nValid: loss - {valid_loss:.2f} acc - {valid_acc:.4f} auc - {valid_auc:.4f}")
 
 '''
-Mock test in iter_env_sakt
+Mock test in iter_env_sakt_new
 '''

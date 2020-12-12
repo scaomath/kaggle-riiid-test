@@ -1,7 +1,7 @@
 #%%
 import pandas as pd
 import numpy as np
-from tqdm.notebook import tqdm
+from tqdm import tqdm
 import time
 from sklearn.metrics import roc_auc_score
 import torch

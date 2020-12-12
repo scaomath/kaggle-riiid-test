@@ -19,8 +19,7 @@ from torchsummary import summary
 
 from sklearn.metrics import roc_auc_score
 from utils import *
-from dataset import *
-from models import *
+from transformer import *
 # %%
 '''
 To-do:

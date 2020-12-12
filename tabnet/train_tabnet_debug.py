@@ -33,11 +33,12 @@ DEBUG = True
 VALIDATION = False
 
 # %%
+start = time()
 print("Loading training...")
 train_df = pd.read_parquet(DATA_DIR+'cv2_train.parquet')
 valid_df = pd.read_parquet(DATA_DIR+'cv2_valid.parquet')
 questions_df = pd.read_csv(DATA_DIR+'questions.csv')
-print("Loaded training.")
+print(f"Loaded training in {time()-start} seconds.")
 # %%
 # funcs for user stats with loop
 def add_user_feats(df, answered_correctly_sum_u_dict, count_u_dict):

@@ -29,6 +29,8 @@ TIMESTAMP = "timestamp"
 ROW_ID = 'row_id'
 
 TRAIN_COLS = [TIMESTAMP, USER_ID, CONTENT_ID, CONTENT_TYPE_ID, TARGET]
+TRAIN_COLS_NEW = [TIMESTAMP, USER_ID, CONTENT_ID, CONTENT_TYPE_ID, 
+             TARGET, PRIOR_QUESTION_TIME, PRIOR_QUESTION_EXPLAIN]
 
 TRAIN_DTYPES = {TIMESTAMP: 'int64', 
          USER_ID: 'int32', 
@@ -121,47 +123,6 @@ class SAKTDataset(Dataset):
 
         return x, target_id, label
 
-class TestDataset(Dataset):
-    def __init__(self, samples, test_df, n_skills, max_seq=conf.MAX_SEQ):
-        super(TestDataset, self).__init__()
-        self.samples = samples
-        self.user_ids = [x for x in test_df["user_id"].unique()]
-        self.test_df = test_df
-        self.n_skill = n_skills
-        self.max_seq = max_seq
-
-    def __len__(self):
-        return self.test_df.shape[0]
-
-    def __getitem__(self, index):
-        test_info = self.test_df.iloc[index]
-
-        user_id = test_info["user_id"]
-        target_id = test_info["content_id"]
-
-        q = np.zeros(self.max_seq, dtype=int)
-        qa = np.zeros(self.max_seq, dtype=int)
-
-        if user_id in self.samples.index:
-            q_, qa_ = self.samples[user_id]
-            
-            seq_len = len(q_)
-
-            if seq_len >= self.max_seq:
-                q = q_[-self.max_seq:]
-                qa = qa_[-self.max_seq:]
-            else:
-                q[-seq_len:] = q_
-                qa[-seq_len:] = qa_          
-        
-        x = np.zeros(self.max_seq-1, dtype=int)
-        x = q[1:].copy()
-        x += (qa[1:] == 1) * self.n_skill
-        
-        questions = np.append(q[2:], [target_id])
-        
-        return x, questions
-
 
 class SAKTDatasetNew(Dataset):
     def __init__(self, group, n_skill, subset="train", max_seq=conf.MAX_SEQ):
@@ -238,6 +199,48 @@ class SAKTDatasetNew(Dataset):
 
         return x, target_id,  label,  prior_q_time,  prior_q_explain
 
+
+class TestDataset(Dataset):
+    def __init__(self, samples, test_df, n_skills, max_seq=conf.MAX_SEQ):
+        super(TestDataset, self).__init__()
+        self.samples = samples
+        self.user_ids = [x for x in test_df["user_id"].unique()]
+        self.test_df = test_df
+        self.n_skill = n_skills
+        self.max_seq = max_seq
+
+    def __len__(self):
+        return self.test_df.shape[0]
+
+    def __getitem__(self, index):
+        test_info = self.test_df.iloc[index]
+
+        user_id = test_info["user_id"]
+        target_id = test_info["content_id"]
+
+        q = np.zeros(self.max_seq, dtype=int)
+        qa = np.zeros(self.max_seq, dtype=int)
+
+        if user_id in self.samples.index:
+            q_, qa_ = self.samples[user_id]
+            
+            seq_len = len(q_)
+
+            if seq_len >= self.max_seq:
+                q = q_[-self.max_seq:]
+                qa = qa_[-self.max_seq:]
+            else:
+                q[-seq_len:] = q_
+                qa[-seq_len:] = qa_          
+        
+        x = np.zeros(self.max_seq-1, dtype=int)
+        x = q[1:].copy()
+        x += (qa[1:] == 1) * self.n_skill
+        
+        questions = np.append(q[2:], [target_id])
+        
+        return x, questions
+
 class TestDatasetNew(Dataset):
     def __init__(self, samples, test_df, n_skills, max_seq=conf.MAX_SEQ):
         super(TestDatasetNew, self).__init__()
@@ -284,8 +287,13 @@ class TestDatasetNew(Dataset):
         x += (qa[1:] == 1) * self.n_skill
         
         questions = np.append(q[2:], [target_id])
+
+        # prior_q_time = pqt[1:]  # this only stores the current one CV -0.002
+        # prior_q_explain = pqe[1:] #  this only stores the current one
+        prior_q_time = np.append(pqt[2:], [prior_q_time])
+        prior_q_explain = np.append(pqe[2:], [prior_q_explain])
         
-        return x, questions
+        return x, questions, prior_q_time, prior_q_explain
 
 class FFN(nn.Module):
     def __init__(self, state_size=conf.NUM_EMBED):
@@ -294,14 +302,14 @@ class FFN(nn.Module):
 
         self.lr1 = nn.Linear(state_size, state_size)
         self.relu = nn.ReLU()
-        self.lrelu = nn.LeakyReLU()
+        self.leakyrelu = nn.LeakyReLU()
         self.lr2 = nn.Linear(state_size, state_size)
         self.dropout = nn.Dropout(0.2)
     
     def forward(self, x):
         x = self.lr1(x)
         x = self.relu(x)
-        # x = self.lrelu(x)
+        # x = self.leakyrelu(x)
         x = self.lr2(x)
         return self.dropout(x)
 
@@ -327,10 +335,7 @@ class SAKTModel(nn.Module):
         self.layer_normal = nn.LayerNorm(embed_dim) 
 
         self.ffn = FFN(embed_dim)
-        self.fc1 = nn.Linear(embed_dim, embed_dim)
-        self.fc2 = nn.Linear(embed_dim, 1)
-        self.leakyrelu = nn.LeakyReLU()
-        self.scaling = conf.SCALING
+        self.pred = nn.Linear(embed_dim, 1)
     
     def forward(self, x, question_ids):
         device = x.device        
@@ -354,7 +359,7 @@ class SAKTModel(nn.Module):
         # x = self.layer_normal(x) + att_output # modified, seems not changing much
         # x = self.fc1(x)
         # x = self.leakyrelu(x)
-        x = self.fc2(x)
+        x = self.pred(x)
 
         return x.squeeze(-1), att_weight
 
@@ -379,10 +384,10 @@ class SAKTModelNew(nn.Module):
         self.layer_normal = nn.LayerNorm(embed_dim) 
 
         self.ffn = FFN(embed_dim)
-        self.fc1 = nn.Linear(embed_dim, embed_dim)
-        self.fc2 = nn.Linear(embed_dim, 1)
+        # self.fc1 = nn.Linear(embed_dim, embed_dim)
+        self.pred = nn.Linear(embed_dim, 1)
         self.leakyrelu = nn.LeakyReLU()
-        self.scaling = conf.SCALING
+        # self.scaling = conf.SCALING
     
     def forward(self, x, question_ids, prior_question_time=None, prior_question_explain=None):
         '''
@@ -416,11 +421,9 @@ class SAKTModelNew(nn.Module):
         att_output = att_output.permute(1, 0, 2) # att_output: [s_len, bs, embed] => [bs, s_len, embed]
 
         x = self.ffn(att_output)
+        x = self.leakyrelu(x)
         x = self.layer_normal(x + att_output) # original
-        # x = self.layer_normal(x) + att_output # modified, seems not changing much
-        # x = self.fc1(x)
-        # x = self.leakyrelu(x)
-        x = self.fc2(x)
+        x = self.pred(x)
 
         return x.squeeze(-1), att_weight
 
@@ -662,7 +665,7 @@ def run_train(model, train_iterator, valid_iterator, optim, scheduler, criterion
                         **{"valid_auc": val_auc, "valid_acc": val_acc}})
         
         if val_auc > auc_max:
-            print(f"[Epoch {epoch}/{epochs}] auc improved from {auc_max:.4f} to {val_auc:.4f}") 
+            print(f"[Epoch {epoch}/{epochs}] auc improved from {auc_max:.6f} to {val_auc:.6f}") 
             auc_max = val_auc
             torch.save(model.state_dict(), 
             os.path.join(MODEL_DIR, f"sakt_head_{conf.NUM_HEADS}_embed_{conf.NUM_EMBED}_auc_{val_auc:.4f}.pt"))
@@ -739,7 +742,7 @@ def run_train_new(model, train_iterator, valid_iterator, optim, scheduler, crite
                         **{"valid_auc": val_auc, "valid_acc": val_acc}})
         
         if val_auc > auc_max:
-            print(f"\n[Epoch {epoch}/{epochs}] auc improved from {auc_max:.4f} to {val_auc:.4f}") 
+            print(f"\n[Epoch {epoch}/{epochs}] auc improved from {auc_max:.6f} to {val_auc:.6f}") 
             auc_max = val_auc
             if val_auc > 0.75:
                 torch.save(model.state_dict(), 
@@ -748,18 +751,33 @@ def run_train_new(model, train_iterator, valid_iterator, optim, scheduler, crite
             else:
                 over_fit += 1
 
-        if over_fit >= 6:
+        if over_fit >= 5:
             print(f"\nEarly stop epoch at {epoch}")
             break
     return model, history
 
 
-def load_sakt_model(model_file, device='cuda', params=None):
+def load_sakt_model(model_file, device='cuda', structure=None):
     # creating the model and load the weights
-    if params is None:
+    if structure is None:
         model = SAKTModel(conf.NUM_SKILLS, embed_dim=conf.NUM_EMBED)
     else:
-        model = SAKTModel(params['n_skills'], embed_dim=params['n_embed'], num_heads=params['n_head'])
+        model = SAKTModel(structure['n_skills'], 
+                          embed_dim=structure['n_embed'], 
+                          num_heads=structure['n_head'])
+    model = model.to(device)
+    model.load_state_dict(torch.load(model_file, map_location=device))
+
+    return model
+
+def load_sakt_model_new(model_file, device='cuda', structure=None):
+    # creating the model and load the weights
+    if structure is None:
+        model = SAKTModelNew(conf.NUM_SKILLS, embed_dim=conf.NUM_EMBED)
+    else:
+        model = SAKTModelNew(structure['n_skills'], 
+                          embed_dim=structure['n_embed'], 
+                          num_heads=structure['n_head'])
     model = model.to(device)
     model.load_state_dict(torch.load(model_file, map_location=device))
 
