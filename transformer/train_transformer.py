@@ -20,8 +20,7 @@ from torch.autograd import Variable
 from torchsummary import summary
 
 from sklearn.metrics import roc_auc_score
-from utils import *
-from transformer_dataset import *
+from ..utils import *
 from transformer import *
 # %%
 '''

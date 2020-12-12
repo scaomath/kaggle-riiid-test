@@ -1,3 +1,4 @@
+import os, sys
 from tqdm import tqdm
 import numpy as np
 import torch.nn as nn
@@ -8,6 +9,8 @@ from sklearn.metrics import roc_auc_score
 from torchsummary import summary
 from torch.optim import Optimizer
 
+HOME =  "/home/scao/Documents/kaggle-riiid-test/"
+sys.path.append(HOME)
 from utils import *
 
 MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
@@ -57,6 +60,7 @@ class conf:
     NUM_EMBED = 128
     NUM_HEADS = 8
     NUM_SKILLS = 13523 # len(skills)
+    NUM_TIME = 301 # when scaled by 1000 and round, priori question time's unique values
     MAX_SEQ = 100
     SCALING = 2 # scaling before sigmoid
 
@@ -190,8 +194,8 @@ class SAKTDatasetNew(Dataset):
         seq_len = len(q_)
 
         q = np.zeros(self.max_seq, dtype=int)
-        pqt = np.zeros(self.max_seq, dtype=np.float16)
-        pqe = np.zeros(self.max_seq, dtype=np.int8)
+        pqt = np.zeros(self.max_seq, dtype=int)
+        pqe = np.zeros(self.max_seq, dtype=int)
         qa = np.zeros(self.max_seq, dtype=int)
 
         if seq_len >= self.max_seq:
@@ -232,7 +236,7 @@ class SAKTDatasetNew(Dataset):
         x = q[:-1].copy() # 0 to 98
         x += (qa[:-1] == 1) * self.n_skill # y = et + rt x E
 
-        return x, target_id,  label, prior_q_time, prior_q_explain
+        return x, target_id,  label,  prior_q_time,  prior_q_explain
 
 class TestDatasetNew(Dataset):
     def __init__(self, samples, test_df, n_skills, max_seq=conf.MAX_SEQ):
@@ -315,8 +319,8 @@ class SAKTModel(nn.Module):
         self.layer_normal = nn.LayerNorm(embed_dim) 
 
         self.ffn = FFN(embed_dim)
-        self.fc1 = nn.Linear(embed_dim, embed_dim//2)
-        self.fc2 = nn.Linear(embed_dim//2, 1)
+        self.fc1 = nn.Linear(embed_dim, embed_dim)
+        self.fc2 = nn.Linear(embed_dim, 1)
         self.leakyrelu = nn.LeakyReLU()
         self.scaling = conf.SCALING
     
@@ -356,6 +360,8 @@ class SAKTModelNew(nn.Module):
         self.embedding = nn.Embedding(2*n_skill+1, embed_dim)
         self.pos_embedding = nn.Embedding(max_seq-1, embed_dim)
         self.e_embedding = nn.Embedding(n_skill+1, embed_dim)
+        self.pqt_embedding = nn.Embedding(conf.NUM_TIME, embed_dim) # embedding of prior question time
+        self.pa_embedding = nn.Embedding(3+1, embed_dim) # embedding of priori question answered
 
         self.multi_att = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.2)
 
@@ -363,18 +369,21 @@ class SAKTModelNew(nn.Module):
         self.layer_normal = nn.LayerNorm(embed_dim) 
 
         self.ffn = FFN(embed_dim)
-        self.fc1 = nn.Linear(embed_dim, embed_dim//2)
-        self.fc2 = nn.Linear(embed_dim//2, 1)
+        self.fc1 = nn.Linear(embed_dim, embed_dim)
+        self.fc2 = nn.Linear(embed_dim, 1)
         self.leakyrelu = nn.LeakyReLU()
         self.scaling = conf.SCALING
     
-    def forward(self, x, question_ids):
+    def forward(self, x, question_ids, prior_question_time=None, prior_question_explain=None):
         device = x.device        
         x = self.embedding(x)
         pos_id = torch.arange(x.size(1)).unsqueeze(0).to(device)
-
         pos_x = self.pos_embedding(pos_id)
-        x = x + pos_x
+
+        pq_x = self.pqt_embedding(prior_question_time)
+        pa_x = self.pa_embedding(prior_question_explain)
+
+        x += pos_x + pq_x + pa_x
 
         e = self.e_embedding(question_ids)
 
@@ -475,6 +484,93 @@ def valid_epoch(model, valid_iterator, criterion, device="cuda"):
     loss = np.mean(valid_loss)
 
     return loss, acc, auc
+
+def train_epoch_new(model, train_iterator, optim, criterion, device="cuda"):
+    model.train()
+
+    train_loss = []
+    num_corrects = 0
+    num_total = 0
+    labels = []
+    outs = []
+
+    len_dataset = len(train_iterator)
+
+    with tqdm(total=len_dataset) as pbar:
+        for idx, item in enumerate(train_iterator): 
+            x = item[0].to(device).long()
+            target_id = item[1].to(device).long()
+            prior_q_time = item[3].to(device).long()
+            priori_q_explain = item[4].to(device).long()
+            label = item[2].to(device).float()
+
+            optim.zero_grad()
+            output, atten_weight = model(x, target_id, prior_q_time, priori_q_explain)
+            # print(f'X shape: {x.shape}, target_id shape: {target_id.shape}')
+            loss = criterion(output, label)
+            loss.backward()
+            optim.step()
+            train_loss.append(loss.item())
+
+            output = output[:, -1]
+            label = label[:, -1] 
+            pred = (torch.sigmoid(output) >= 0.5).long()
+            
+            num_corrects += (pred == label).sum().item()
+            num_total += len(label)
+
+            labels.extend(label.view(-1).data.cpu().numpy())
+            #outs.extend(output.view(-1).data.cpu().numpy())
+            outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
+
+            if idx % conf.TQDM_INT == 0:
+                pbar.set_description(f'train loss - {train_loss[-1]:.4f}')
+                pbar.update(conf.TQDM_INT)
+    
+    acc = num_corrects / num_total
+    auc = roc_auc_score(labels, outs)
+    loss = np.mean(train_loss)
+
+    return loss, acc, auc
+
+def valid_epoch_new(model, valid_iterator, criterion, device="cuda"):
+    model.eval()
+
+    valid_loss = []
+    num_corrects = 0
+    num_total = 0
+    labels = []
+    outs = []
+
+    for item in valid_iterator: 
+        x = item[0].to(device).long()
+        target_id = item[1].to(device).long()
+        prior_q_time = item[3].to(device).long()
+        priori_q_explain = item[4].to(device).long()
+        label = item[2].to(device).float()
+
+        with torch.no_grad():
+            output, atten_weight = model(x, target_id, prior_q_time, priori_q_explain)
+        loss = criterion(output, label)
+        valid_loss.append(loss.item())
+
+        output = output[:, -1] # (BS, 1)
+        label = label[:, -1] 
+        pred = (torch.sigmoid(output) >= 0.5).long()
+        
+        num_corrects += (pred == label).sum().item()
+        num_total += len(label)
+
+        labels.extend(label.view(-1).data.cpu().numpy())
+        #outs.extend(output.view(-1).data.cpu().numpy())
+        outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
+
+    acc = num_corrects / num_total
+    auc = roc_auc_score(labels, outs)
+    loss = np.mean(valid_loss)
+
+    return loss, acc, auc
+
 
 
 def run_train(model, train_iterator, valid_iterator, optim, scheduler, criterion, 

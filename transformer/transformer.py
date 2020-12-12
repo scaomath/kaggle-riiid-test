@@ -62,6 +62,15 @@ class RiiidTest(Dataset):
         return idx, self.d[idx]["content_id"], self.d[idx]["task_container_id"], \
     self.d[idx]["part_id"], self.d[idx]["prior_question_elapsed_time"], self.d[idx]["padded"]
 
+def get_valid(train_df, n_tail=50):
+
+    valid_df = train_df.groupby(['user_id']).tail(n_tail)
+    print("valid:", valid_df.shape, "users:", valid_df['user_id'].nunique())
+    # Train
+    train_df.drop(valid_df.index, inplace = True)
+    print("train:", train_df.shape, "users:", train_df['user_id'].nunique())
+    return train_df, valid_df
+    
 def collate_fn(batch):
     _, content_id, task_id, part_id, prior_question_elapsed_time, padded, labels = zip(*batch)
     content_id = torch.Tensor(content_id).long()
@@ -82,15 +91,6 @@ def collate_fn_test(batch):
     padded = torch.Tensor(padded).bool()
     # remember the order
     return content_id, task_id, part_id, prior_question_elapsed_time, padded
-
-def get_valid(train_df, n_tail=50):
-
-    valid_df = train_df.groupby(['user_id']).tail(n_tail)
-    print("valid:", valid_df.shape, "users:", valid_df['user_id'].nunique())
-    # Train
-    train_df.drop(valid_df.index, inplace = True)
-    print("train:", train_df.shape, "users:", train_df['user_id'].nunique())
-    return train_df, valid_df
 
 
 def preprocess(data_df, question_df, train=True):
@@ -274,7 +274,7 @@ class TransformerModel(nn.Module):
     def forward(self, content_id, part_id, prior_question_elapsed_time=None, mask_src=None):
         '''
         S is the sequence length, N the batch size and E the Embedding Dimension (number of features).
-        src: (S, N, E)
+        src: (S, N, E)4
         src_mask: (S, S)
         src_key_padding_mask: (N, S)
         padding mask is (N, S) with boolean True/False.

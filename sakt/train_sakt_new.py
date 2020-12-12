@@ -1,5 +1,10 @@
 #%%
 import gc, sys, os
+sys.path.append("..") 
+
+# import os.path
+# sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir)))
+
 from tqdm import tqdm
 from time import time
 import pickle
@@ -59,10 +64,11 @@ FOLD = 1
 
 TRAIN = True
 PREPROCESS = True
-DEBUG = True
+DEBUG = False
 EPOCHS = 60
 LEARNING_RATE = 1e-3
 NROWS_TRAIN = 10_000_000
+
 
 #%%
 
@@ -131,7 +137,7 @@ print("prior question explained", len(item[4]), item[4])
 # %%
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model = SAKTModel(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS)
+model = SAKTModelNew(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS)
 # optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.99, weight_decay=0.005)
 optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, threshold=0.0001)
