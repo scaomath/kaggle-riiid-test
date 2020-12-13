@@ -12,8 +12,6 @@ import pandas as pd
 import seaborn as sns
 import torch
 import torch.nn as nn
-import torch.nn.utils.rnn as rnn_utils
-from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 from torch.autograd import Variable
 from torch.optim import Optimizer
@@ -56,7 +54,7 @@ DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
 FOLD = 1
 
 TRAIN = True
-PREPROCESS = False
+PREPROCESS = 2
 EPOCHS = 60
 LEARNING_RATE = 1e-3
 PATIENCE = 5
@@ -68,12 +66,14 @@ class conf:
     TQDM_INT = 8
     WORKERS = 8 # 0
     LEARNING_RATE = 1e-3
+    BATCH_SIZE = 1024
+    VAL_BATCH_SIZE = 4096
     NUM_EMBED = 128
     NUM_HEADS = 8
     NUM_SKILLS = 13523 # len(skills)
     NUM_TIME = 300 # when scaled by 1000 and round, priori question time's unique values
     MAX_SEQ = 150
-    SCALING = 2 # scaling before sigmoid
+    SCALING = 1 # scaling before sigmoid
     PATIENCE = 8 # overfit patience
 
     if torch.cuda.is_available():
@@ -82,19 +82,20 @@ class conf:
         map_location='cpu'
 
 #%%
-
-if PREPROCESS:
-    print("Preprocessing training...")
+if PREPROCESS == 1:
+    print("\nLoading train...")
     train_df = pd.read_csv(DATA_DIR+'train.csv', usecols=[1, 2, 3, 4, 7], dtype=TRAIN_DTYPES)
     print(f'Loaded train.')
     print(TRAIN_DTYPES)
     train_df = train_df[train_df[CONTENT_TYPE_ID] == False]
     train_df = train_df.sort_values([TIMESTAMP], ascending=True).reset_index(drop = True)
-    group = train_df[[USER_ID, CONTENT_ID, TARGET]].groupby(USER_ID)\
-        .apply(lambda r: (r[CONTENT_ID].values, r[TARGET].values))
+    group = train_df[[USER_ID, CONTENT_ID, TARGET]]\
+                .groupby(USER_ID)\
+                .apply(lambda r: (r[CONTENT_ID].values, 
+                                  r[TARGET].values))
     train_group, valid_group = train_test_split(group, test_size=0.1)
-else: # using preprocessed files
-    print("Loading training...")
+elif PREPROCESS == 2: # using preprocessed files
+    print("\nLoading train from parquet...")
     train_df = pd.read_parquet(DATA_DIR+'cv3_train.parquet')
     valid_df = pd.read_parquet(DATA_DIR+'cv3_valid.parquet')
     train_df = train_df[TRAIN_DTYPES.keys()]
@@ -111,15 +112,18 @@ else: # using preprocessed files
     # Index by user_id
     train_group = train_df[[USER_ID, CONTENT_ID, TARGET]].groupby(USER_ID)\
         .apply(lambda r: (r[CONTENT_ID].values, r[TARGET].values))
-
-
+else:
+    print("\nLoading preprocessed file...")
+    with open(DATA_DIR+'sakt_data_new.pickle', 'rb') as f:
+        group = pickle.load(f)
+    train_group, valid_group = train_test_split(group, test_size=0.1)
 
 # skills = train_df[CONTENT_ID].unique()
 n_skill = conf.NUM_SKILLS #len(skills) # len(skills) might not have all
-print("Number of skills", n_skill)
+print("\nNumber of skills", n_skill)
 
 
-print("valid by user:", len(valid_group))
+print("\nvalid by user:", len(valid_group))
 print("train by user:", len(train_group))
 
 # %%
@@ -137,9 +141,9 @@ val_loader = DataLoader(valid_dataset,
 
 item = train_dataset.__getitem__(5)
 
-print("x", len(item[0]), item[0], '\n\n')
-print("target_id", len(item[1]), item[1] , '\n\n')
-print("label", len(item[2]), item[2])
+print("\n\nx", len(item[0]), item[0], '\n\n')
+print("\n\ntarget_id", len(item[1]), item[1] , '\n\n')
+print("\n\nlabel", len(item[2]), item[2])
 
 # %%
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -147,16 +151,17 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = SAKTModel(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS)
 # optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.99, weight_decay=0.005)
 optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, threshold=0.0001)
+# scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, threshold=1e-4, verbose=1)
+scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, eta_min=LEARNING_RATE*1e-2, verbose=1)
 # optimizer = HNAGOptimizer(model.parameters(), lr=1e-3) 
 criterion = nn.BCEWithLogitsLoss()
 
 model.to(device)
 criterion.to(device)
 num_params = get_num_params(model)
-print('\n\n')
-print(f"# heads  : {conf.NUM_HEADS}")
+print(f"\n\n# heads  : {conf.NUM_HEADS}")
 print(f"# embed  : {conf.NUM_EMBED}")
+print(f"seq len  : {conf.MAX_SEQ}")
 print(f"# params : {num_params}")
 # %%
 
@@ -166,35 +171,9 @@ if TRAIN:
     auc_max = -np.inf
     over_fit = 0
 
-    print("\n\nTraining...:")
-    for epoch in range(1, EPOCHS+1):
-
-        train_loss, train_acc, train_auc = train_epoch(model, train_loader, optimizer, criterion)
-        valid_loss, valid_acc, valid_auc = valid_epoch(model, val_loader, criterion)
-        scheduler.step(valid_loss)
-        print(f"\n\n[Epoch {epoch}/{EPOCHS}]")
-        print(f"Train: loss - {train_loss:.2f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
-        print(f"Valid: loss - {valid_loss:.2f} acc - {valid_acc:.4f} auc - {valid_auc:.4f}")
-        lr = optimizer.param_groups[0]['lr']
-        history.append({"epoch":epoch, "lr": lr, 
-                        **{"train_auc": train_auc, "train_acc": train_acc}, 
-                        **{"valid_auc": valid_auc, "valid_acc": valid_acc}})
-        
-        if valid_auc > auc_max:
-            print(f"Epoch {epoch}: auc improved from {auc_max:.4f} to {valid_auc:.4f}") 
-            auc_max = valid_auc
-            over_fit = 0
-            if valid_auc > 0.75:
-                torch.save(model.state_dict(), 
-                os.path.join(MODEL_DIR, f"{model.__name__}_head_{conf.NUM_HEADS}_embed_{conf.NUM_EMBED}_seq_{conf.MAX_SEQ}_auc_{valid_auc:.4f}.pt"))
-                print("Saving model ...\n\n")
-        else:
-            over_fit += 1
-        
-        if over_fit >= PATIENCE:
-            print(f"Early stop epoch at {epoch}")
-            break
-
+    print("\n\nTraining...:\n\n")
+    model, history = run_train(model, train_loader, val_loader, optimizer, scheduler, criterion, 
+              epochs=EPOCHS, device="cuda", conf=conf)
     with open(DATA_DIR+f'history_{model.__name__}_{DATE_STR}.pickle', 'wb') as handle:
         pickle.dump(history, handle, protocol=pickle.HIGHEST_PROTOCOL)
 else:

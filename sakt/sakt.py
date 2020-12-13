@@ -145,7 +145,7 @@ class SAKTDataset(Dataset):
 
         if seq_len >= self.max_seq:
             if random() > 0.1:
-                start_index = randint(seq_len - self.max_seq)
+                start_index = randint(0, seq_len - self.max_seq)
                 end_index = start_index + self.max_seq
                 q[:] = q_[start_index:end_index] # Pick 100 questions from a random index
                 qa[:] = qa_[start_index:end_index] # Pick 100 answers from a random index
@@ -153,7 +153,7 @@ class SAKTDataset(Dataset):
                 q[:] = q_[-self.max_seq:]
                 qa[:] = qa_[-self.max_seq:]
         else:
-            if random()>0.1:
+            if random() > 0.1:
                 seq_len = randint(2,seq_len)
                 q[-seq_len:] = q_[:seq_len]
                 qa[-seq_len:] = qa_[:seq_len]
@@ -587,14 +587,14 @@ def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
 
             output = output[:, -1]
             label = label[:, -1] 
-            pred = (torch.sigmoid(output) >= 0.5).long()
+            output = torch.sigmoid(output)
+            pred = (output >= 0.5).long()
             
             num_corrects += (pred == label).sum().item()
             num_total += len(label)
 
             labels.extend(label.view(-1).data.cpu().numpy())
-            #outs.extend(output.view(-1).data.cpu().numpy())
-            outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
+            outs.extend(output.view(-1).data.cpu().numpy())
 
             if idx % TQDM_INT == 0:
                 pbar.set_description(f'train loss - {train_loss[-1]:.4f}')
@@ -606,7 +606,7 @@ def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
 
     return loss, acc, auc
 
-def valid_epoch(model, valid_iterator, criterion, device="cuda"):
+def valid_epoch(model, valid_iterator, criterion, device="cuda", conf=None):
     model.eval()
 
     valid_loss = []
@@ -625,16 +625,16 @@ def valid_epoch(model, valid_iterator, criterion, device="cuda"):
         loss = criterion(output, label)
         valid_loss.append(loss.item())
 
-        output = output[:, -1] # (BS, 1)
+        output = conf.SCALING*output[:, -1] # (BS, 1)
         label = label[:, -1] 
-        pred = (torch.sigmoid(output) >= 0.5).long()
+        output = torch.sigmoid(output)
+        pred = ( output >= 0.5).long()
         
         num_corrects += (pred == label).sum().item()
         num_total += len(label)
 
         labels.extend(label.view(-1).data.cpu().numpy())
-        #outs.extend(output.view(-1).data.cpu().numpy())
-        outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
+        outs.extend(output.view(-1).data.cpu().numpy())
 
     acc = num_corrects / num_total
     auc = roc_auc_score(labels, outs)
@@ -671,14 +671,14 @@ def train_epoch_new(model, train_iterator, optim, criterion, device="cuda"):
 
             output = output[:, -1]
             label = label[:, -1] 
-            pred = (torch.sigmoid(output) >= 0.5).long()
+            output = torch.sigmoid(output)
+            pred = ( output >= 0.5).long()
             
             num_corrects += (pred == label).sum().item()
             num_total += len(label)
 
             labels.extend(label.view(-1).data.cpu().numpy())
-            #outs.extend(output.view(-1).data.cpu().numpy())
-            outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
+            outs.extend(output.view(-1).data.cpu().numpy())
 
             if idx % TQDM_INT == 0:
                 pbar.set_description(f'train loss - {train_loss[-1]:.4f}')
@@ -713,14 +713,14 @@ def valid_epoch_new(model, valid_iterator, criterion, device="cuda", conf=None):
 
         output = conf.SCALING*output[:, -1] # (BS, 1)
         label = label[:, -1] 
-        pred = (torch.sigmoid(output) >= 0.5).long()
+        output = torch.sigmoid(output)
+        pred = (output >= 0.5).long()
         
         num_corrects += (pred == label).sum().item()
         num_total += len(label)
 
         labels.extend(label.view(-1).data.cpu().numpy())
-        #outs.extend(output.view(-1).data.cpu().numpy())
-        outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
+        outs.extend(output.view(-1).data.cpu().numpy())
 
     acc = num_corrects / num_total
     auc = roc_auc_score(labels, outs)
@@ -731,14 +731,14 @@ def valid_epoch_new(model, valid_iterator, criterion, device="cuda", conf=None):
 
 
 def run_train(model, train_iterator, valid_iterator, optim, scheduler, criterion, 
-              epochs=40, device="cuda", conf=None):
+              epochs=60, device="cuda", conf=None):
     history = []
-    auc_max = -np.inf
-    val_loss = -np.inf
+    auc_max = 0
+    val_loss = 0
 
     for epoch in range(1, epochs+1):
 
-        tqdm.write(f"\n\n[Epoch {epoch}/{epochs}]")
+        tqdm.write(f"\n[Epoch {epoch}/{epochs}]\n")
         model.train()
 
         train_loss = []
@@ -757,27 +757,29 @@ def run_train(model, train_iterator, valid_iterator, optim, scheduler, criterion
                 label = item[2].to(device).float()
 
                 optim.zero_grad()
-                output, atten_weight = model(x, target_id)
+                output, _ = model(x, target_id)
                 # print(f'X shape: {x.shape}, target_id shape: {target_id.shape}')
                 loss = criterion(output, label)
                 loss.backward()
-                if val_loss > 0:
-                    optim.step()
-                    # scheduler.step(val_loss)
-                    scheduler.step(epoch + idx / len_dataset)
-                else:
-                    optim.step()
+                optim.step()
+                if val_loss and scheduler is not None:
+                    scheduler_name = str(scheduler.__class__)
+                    if 'CosineAnnealingWarmRestarts' in scheduler_name:
+                        scheduler.step(epoch + idx / len_dataset)
+                    elif 'ReduceLROnPlateau' in scheduler_name:
+                        scheduler.step(val_loss)
                 train_loss.append(loss.item())
 
                 output = output[:, -1]
                 label = label[:, -1] 
-                pred = (torch.sigmoid(output) >= 0.5).long()
+                output = torch.sigmoid(output)
+                pred = (output >= 0.5).long()
                 
                 num_corrects += (pred == label).sum().item()
                 num_total += len(label)
 
                 labels.extend(label.view(-1).data.cpu().numpy())
-                outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
+                outs.extend(output.view(-1).data.cpu().numpy())
 
                 if idx % TQDM_INT == 0:
                     pbar.set_description(f'train loss - {train_loss[-1]:.4f} val loss - {val_loss:.4f}')
@@ -787,10 +789,11 @@ def run_train(model, train_iterator, valid_iterator, optim, scheduler, criterion
         train_auc = roc_auc_score(labels, outs)
         train_loss = np.mean(train_loss)
 
-        tqdm.write(f"Train: loss - {train_loss:.2f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
+        tqdm.write(f"\nTrain: loss - {train_loss:.2f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
 
-        val_loss, val_acc, val_auc = valid_epoch(model, valid_iterator, criterion, device=device)
-        tqdm.write(f"Valid: loss - {val_loss:.2f} acc - {val_acc:.4f} auc - {val_auc:.4f}")
+        val_loss, val_acc, val_auc = valid_epoch(model, valid_iterator, criterion, 
+                                                 device=device, conf=conf)
+        tqdm.write(f"\nValid: loss - {val_loss:.2f} acc - {val_acc:.4f} auc - {val_auc:.4f}")
 
         lr = optim.param_groups[0]['lr']
         history.append({"epoch":epoch, "lr": lr, 
@@ -798,7 +801,7 @@ def run_train(model, train_iterator, valid_iterator, optim, scheduler, criterion
                         **{"valid_auc": val_auc, "valid_acc": val_acc}})
         
         if val_auc > auc_max:
-            print(f"[Epoch {epoch}/{epochs}] auc improved from {auc_max:.6f} to {val_auc:.6f}") 
+            print(f"\n[Epoch {epoch}/{epochs}] auc improved from {auc_max:.6f} to {val_auc:.6f}") 
             auc_max = val_auc
             over_fit = 0
             if val_auc > 0.75:
@@ -818,12 +821,12 @@ def run_train(model, train_iterator, valid_iterator, optim, scheduler, criterion
 def run_train_new(model, train_iterator, valid_iterator, optim, scheduler, criterion, 
               epochs=60, device="cuda", conf=None):
     history = []
-    auc_max = -np.inf
-    val_loss = -np.inf
+    auc_max = 0
+    val_loss = 0 
 
     for epoch in range(1, epochs+1):
 
-        tqdm.write(f"\n\n[Epoch {epoch}/{epochs}]\n")
+        tqdm.write(f"\n[Epoch {epoch}/{epochs}]\n")
         model.train()
 
         train_loss = []
@@ -843,28 +846,26 @@ def run_train_new(model, train_iterator, valid_iterator, optim, scheduler, crite
                 label = item[2].to(device).float()
 
                 optim.zero_grad()
-                output, atten_weight = model(x, target_id, prior_q_time, priori_q_explain)
+                output, _ = model(x, target_id, prior_q_time, priori_q_explain)
                 # print(f'X shape: {x.shape}, target_id shape: {target_id.shape}')
                 loss = criterion(output, label)
                 loss.backward()
-                if val_loss > 0:
-                    optim.step()
+                optim.step()
+                if val_loss and scheduler is not None:
                     # scheduler.step(val_loss) # reduce on plateau
                     scheduler.step(epoch + idx / len_dataset) # cosine annealing
-                else:
-                    optim.step()
                 train_loss.append(loss.item())
 
                 output = output[:, -1]
                 label = label[:, -1] 
-                pred = (torch.sigmoid(output) >= 0.5).long()
+                output = torch.sigmoid(output)
+                pred = (output >= 0.5).long()
                 
                 num_corrects += (pred == label).sum().item()
                 num_total += len(label)
 
                 labels.extend(label.view(-1).data.cpu().numpy())
-                #outs.extend(output.view(-1).data.cpu().numpy())
-                outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
+                outs.extend(output.view(-1).data.cpu().numpy())
 
                 if idx % TQDM_INT == 0:
                     pbar.set_description(f'train loss - {train_loss[-1]:.4f} val loss - {val_loss:.4f}')
