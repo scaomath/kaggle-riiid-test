@@ -42,16 +42,12 @@ print(f'Device     : {DEVICE}')
 https://www.kaggle.com/mpware/sakt-fork
 Self-Attentive model for Knowledge Tracing model (SAKT)
 This is a fork of: https://www.kaggle.com/wangsg/a-self-attentive-model-for-knowledge-tracing from @wangsg
+an implementation of this paper: https://arxiv.org/pdf/1907.06837.pdf
 
-Which is an implementation of this paper: https://arxiv.org/pdf/1907.06837.pdf
+Version notes:
 
-With the following improvements:
-
-Pytorch random fixed to be reproductible
-Random sequence added during training
-torch.sigmoid added/fixed to train loop
-Training plot
-Train/Valid simple split to save best model
+- Increasing seq_len for sakt new model does not work well
+- 
 '''
 
 TQDM_INT = 8 
@@ -64,7 +60,7 @@ FOLD = 1
 TRAIN = True
 PREPROCESS = False
 DEBUG = False
-EPOCHS = 80
+EPOCHS = 60
 LEARNING_RATE = 1e-3
 NROWS_TRAIN = 10_000_000
 
@@ -142,11 +138,12 @@ print("prior question explained", len(item[4]), item[4])
 # %%
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model = SAKTModelNew(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS)
+# model = SAKTModelNew(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS)
+model = SAKTMulti(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS)
 # optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.99, weight_decay=0.005)
 optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 # scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, threshold=0.0001)
-scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, eta_min=1e-5)
+scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, eta_min=LEARNING_RATE*1e-3)
 # scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=1e-4, max_lr=1e-3)
 # optimizer = HNAGOptimizer(model.parameters(), lr=1e-3) 
 criterion = nn.BCEWithLogitsLoss()
@@ -157,6 +154,7 @@ num_params = get_num_params(model)
 print('\n\n')
 print(f"# heads  : {conf.NUM_HEADS}")
 print(f"# embed  : {conf.NUM_EMBED}")
+print(f"seq len  : {conf.MAX_SEQ}")
 print(f"# params : {num_params}")
 # %%
 if TRAIN:

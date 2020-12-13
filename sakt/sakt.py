@@ -59,15 +59,16 @@ class conf:
     FILLNA_VAL = 14_000 # for prior question elapsed time, rounded average in train
     TQDM_INT = 8
     WORKERS = 8 # 0
-    BATCH_SIZE = 2048
+    BATCH_SIZE = 1024
     VAL_BATCH_SIZE = 4096
     LEARNING_RATE = 1e-3
     NUM_EMBED = 128
     NUM_HEADS = 8
     NUM_SKILLS = 13523 # len(skills)
     NUM_TIME = 300 # when scaled by 1000 and round, priori question time's unique values
-    MAX_SEQ = 160
+    MAX_SEQ = 150
     SCALING = 2 # scaling before sigmoid
+    PATIENCE = 8 # overfit patience
 
     if torch.cuda.is_available():
         map_location = lambda storage, loc: storage.cuda()
@@ -167,7 +168,7 @@ class SAKTDatasetNew(Dataset):
             if self.subset == "train":
                 # if seq_len > self.max_seq:
                 if random() > 0.1:
-                    random_start_index = randint(seq_len - self.max_seq)
+                    random_start_index = randint(0, seq_len - self.max_seq)
                     '''
                     Pick 100 questions, answers, prior question time, 
                     priori question explain from a random index
@@ -187,10 +188,17 @@ class SAKTDatasetNew(Dataset):
                 pqt[:] = pqt_[-self.max_seq:] 
                 pqe[:] = pqe_[-self.max_seq:]
         else:
-            q[-seq_len:] = q_ # Pick last N question with zero padding
-            qa[-seq_len:] = qa_ # Pick last N answers with zero padding
-            pqt[-seq_len:] = pqt_
-            pqe[-seq_len:] = pqe_      
+            if random()>0.1:
+                seq_len = randint(2,seq_len)
+                q[-seq_len:] = q_[:seq_len]
+                qa[-seq_len:] = qa_[:seq_len]
+                pqt[-seq_len:] = pqt_[:seq_len]
+                pqe[-seq_len:] = pqe_[:seq_len]
+            else:
+                q[-seq_len:] = q_ # Pick last N question with zero padding
+                qa[-seq_len:] = qa_ # Pick last N answers with zero padding
+                pqt[-seq_len:] = pqt_
+                pqe[-seq_len:] = pqe_      
                 
         target_id = q[1:] # Ignore first item 1 to 99
         label = qa[1:] # Ignore first item 1 to 99
@@ -301,20 +309,19 @@ class TestDatasetNew(Dataset):
         return x, questions, prior_q_time, prior_q_explain
 
 class FFN(nn.Module):
-    def __init__(self, state_size=conf.NUM_EMBED):
+    def __init__(self, state_size=conf.NUM_EMBED, num_query=1):
         super(FFN, self).__init__()
         self.state_size = state_size
 
-        self.lr1 = nn.Linear(state_size, state_size)
+        self.lr1 = nn.Linear(state_size, state_size//num_query)
         self.relu = nn.ReLU()
-        self.leakyrelu = nn.LeakyReLU()
-        self.lr2 = nn.Linear(state_size, state_size)
+        # self.leakyrelu = nn.LeakyReLU()
+        self.lr2 = nn.Linear(state_size//num_query, state_size//num_query)
         self.dropout = nn.Dropout(0.2)
     
     def forward(self, x):
         x = self.lr1(x)
         x = self.relu(x)
-        # x = self.leakyrelu(x)
         x = self.lr2(x)
         return self.dropout(x)
 
@@ -361,9 +368,6 @@ class SAKTModel(nn.Module):
 
         x = self.ffn(att_output)
         x = self.layer_normal(x + att_output) # original
-        # x = self.layer_normal(x) + att_output # modified, seems not changing much
-        # x = self.fc1(x)
-        # x = self.leakyrelu(x)
         x = self.pred(x)
 
         return x.squeeze(-1), att_weight
@@ -403,6 +407,8 @@ class SAKTModelNew(nn.Module):
         query: e
         key: x
         value: x
+
+        To do: multiple attention layers
         '''
         device = x.device        
         x = self.embedding(x)
@@ -431,6 +437,85 @@ class SAKTModelNew(nn.Module):
         x = self.pred(x)
 
         return x.squeeze(-1), att_weight
+
+
+class SAKTMulti(nn.Module):
+    def __init__(self, n_skill, max_seq=conf.MAX_SEQ, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS):
+        super(SAKTMulti, self).__init__()
+        self.n_skill = n_skill
+        self.embed_dim = embed_dim
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        self.embedding = nn.Embedding(2*n_skill+1, embed_dim)
+        self.pos_embedding = nn.Embedding(max_seq-1, embed_dim)
+        self.e_embedding = nn.Embedding(n_skill+1, embed_dim)
+        # embedding of prior question time
+        self.pqt_embedding = nn.Embedding(conf.NUM_TIME+1, embed_dim) 
+        # embedding of priori question answered
+        self.pa_embedding = nn.Embedding(2+1, embed_dim) 
+
+        self.multi_att1 = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.2)
+        self.multi_att2 = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.2)
+        self.multi_att3 = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.2)
+
+        self.dropout = nn.Dropout(0.2)
+        self.layer_normal = nn.LayerNorm(embed_dim) 
+
+        self.ffn = FFN(3*embed_dim)
+        self.layer_normal1 = nn.LayerNorm(3*embed_dim) 
+        self.pred = nn.Linear(3*embed_dim, 1)
+        self.leakyrelu = nn.LeakyReLU()
+    
+    def forward(self, x, question_ids, prior_question_time=None, prior_question_explain=None):
+        '''
+        x: encoded performance on all previous questions for a user
+        pos_id: ???
+
+        Attention:
+        query: e
+        key: x
+        value: x
+
+        To do: multiple attention layers
+        '''
+        device = x.device        
+        x = self.embedding(x)
+        pos_id = torch.arange(x.size(1)).unsqueeze(0).to(device)
+        pos_x = self.pos_embedding(pos_id)
+        x += pos_x
+
+
+        e = self.e_embedding(question_ids)
+        pq_x = self.pqt_embedding(prior_question_time)
+        pa_x = self.pa_embedding(prior_question_explain)
+
+        x = x.permute(1, 0, 2) # x: [bs, s_len, embed] => [s_len, bs, embed]
+        e = e.permute(1, 0, 2)
+        pq_x = pq_x.permute(1, 0, 2)
+        pa_x = pa_x.permute(1, 0, 2)
+
+        att_mask = future_mask(x.size(0)).to(device)
+
+        att_output1, att_weight1 = self.multi_att1(e, x, x, attn_mask=att_mask)
+        att_output1 = self.layer_normal(att_output1 + e)
+
+        att_output2, att_weight2 = self.multi_att2(pq_x, x, x, attn_mask=att_mask)
+        att_output2 = self.layer_normal(att_output2 + pq_x)
+
+        att_output3, att_weight3 = self.multi_att3(pa_x, x, x, attn_mask=att_mask)
+        att_output3 = self.layer_normal(att_output3 + pa_x)
+
+        att_output1 = att_output1.permute(1, 0, 2) # att_output: [s_len, bs, embed] => [bs, s_len, embed]
+        att_output2 = att_output2.permute(1, 0, 2)
+        att_output3 = att_output3.permute(1, 0, 2)
+
+        att_output = torch.cat((att_output1, att_output2, att_output3), dim=2)
+        x = self.ffn(att_output)
+        x = self.layer_normal1(x + att_output) # original
+        x = self.leakyrelu(x)
+        x = self.pred(x)
+
+        return x.squeeze(-1), [att_weight1, att_weight2, att_weight3]
 
 def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
     model.train()
@@ -673,7 +758,8 @@ def run_train(model, train_iterator, valid_iterator, optim, scheduler, criterion
             print(f"[Epoch {epoch}/{epochs}] auc improved from {auc_max:.6f} to {val_auc:.6f}") 
             auc_max = val_auc
             torch.save(model.state_dict(), 
-            os.path.join(MODEL_DIR, f"sakt_head_{conf.NUM_HEADS}_embed_{conf.NUM_EMBED}_auc_{val_auc:.4f}.pt"))
+            os.path.join(MODEL_DIR, 
+            f"sakt_head_{conf.NUM_HEADS}_embed_{conf.NUM_EMBED}_seq_{conf.MAX_SEQ}_auc_{val_auc:.4f}.pt"))
     return model, history
 
 
@@ -749,14 +835,16 @@ def run_train_new(model, train_iterator, valid_iterator, optim, scheduler, crite
         if val_auc > auc_max:
             print(f"\n[Epoch {epoch}/{epochs}] auc improved from {auc_max:.6f} to {val_auc:.6f}") 
             auc_max = val_auc
+            over_fit = 0
             if val_auc > 0.75:
                 torch.save(model.state_dict(), 
-                os.path.join(MODEL_DIR, f"sakt_head_{conf.NUM_HEADS}_embed_{conf.NUM_EMBED}_auc_{val_auc:.4f}.pt"))
+                os.path.join(MODEL_DIR, 
+                f"sakt_head_{conf.NUM_HEADS}_embed_{conf.NUM_EMBED}_seq_{conf.MAX_SEQ}_auc_{val_auc:.4f}.pt"))
                 print("Saving model ...\n\n")
-            else:
-                over_fit += 1
+        else:
+            over_fit += 1
 
-        if over_fit >= 5:
+        if over_fit >= conf.PATIENCE:
             print(f"\nEarly stop epoch at {epoch}")
             break
     return model, history
@@ -900,8 +988,19 @@ if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = SAKTModel(conf.NUM_SKILLS, embed_dim=conf.NUM_EMBED)
     num_params = get_num_params(model)
-    print(f"Params number: {num_params}")
-    model_file = find_sakt_model()
-    if model_file is not None: 
-        model = load_sakt_model(model_file)
-        print(f"Loaded {model_file}.")
+    print(f"\nVanilla SAKT # params: {num_params}")
+    # print(model)
+    # model_file = find_sakt_model()
+    # if model_file is not None: 
+    #     model = load_sakt_model(model_file)
+    #     print(f"Loaded {model_file}.")
+
+    model = SAKTModelNew(conf.NUM_SKILLS, embed_dim=conf.NUM_EMBED)
+    num_params = get_num_params(model)
+    print(f"\nNew SAKT with more embeddings # params: {num_params}")
+    # print(model)
+
+    model = SAKTMulti(conf.NUM_SKILLS, embed_dim=conf.NUM_EMBED)
+    num_params = get_num_params(model)
+    print(f"\nMulti Attention layer SAKT # params: {num_params}")
+    # print(model)

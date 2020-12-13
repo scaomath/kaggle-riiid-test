@@ -1,5 +1,5 @@
 import os, psutil
-import random
+import random as rd
 import numpy as np
 import torch
 from sklearn.metrics import roc_auc_score
@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from time import time
 
 def get_seed(s):
-    random.seed(s)
+    rd.seed(s)
     os.environ['PYTHONHASHSEED'] = str(s)
     np.random.seed(s)
     # Torch
