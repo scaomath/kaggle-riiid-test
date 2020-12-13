@@ -1,11 +1,15 @@
-import os, psutil
-import random as rd
-import numpy as np
-import torch
-from sklearn.metrics import roc_auc_score
 import gc
+import os
+import random as rd
 from contextlib import contextmanager
 from time import time
+from datetime import date
+
+import numpy as np
+import psutil
+import torch
+from sklearn.metrics import roc_auc_score
+
 
 def get_seed(s):
     rd.seed(s)
@@ -19,8 +23,8 @@ def get_seed(s):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(s)
 
-# SEED = 1127 
-# get_seed(SEED)
+SEED = 1127 
+get_seed(SEED)
 
 @contextmanager
 def timer(title):
@@ -33,6 +37,10 @@ def cpu_stats():
     py = psutil.Process(pid)
     memory_use = py.memory_info()[0] / 2. ** 30
     return 'memory GB:' + str(np.round(memory_use, 2))
+
+def get_date():
+    today = date.today()
+    return today.strftime("%b-%d-%Y")
 
 def roc_auc_compute_fn(y_targets, y_preds):
     y_true = y_targets.cpu().numpy()

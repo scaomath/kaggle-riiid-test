@@ -20,16 +20,22 @@ DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
 sys.path.append(HOME)
 from utils import *
 
+
+'''
+Columns placeholder and preprocessing params
+'''
 CONTENT_TYPE_ID = "content_type_id"
 CONTENT_ID = "content_id"
 TARGET = "answered_correctly"
 USER_ID = "user_id"
 PRIOR_QUESTION_TIME = 'prior_question_elapsed_time'
-TIME_SCALING = 1000
+
 PRIOR_QUESTION_EXPLAIN = 'prior_question_had_explanation'
 TASK_CONTAINER_ID = "task_container_id"
 TIMESTAMP = "timestamp" 
 ROW_ID = 'row_id'
+FILLNA_VAL = 14_000 # for prior question elapsed time, rounded average in train
+TIME_SCALING = 1000 # scaling down the prior question elapsed time
 
 TRAIN_COLS = [TIMESTAMP, USER_ID, CONTENT_ID, CONTENT_TYPE_ID, TARGET]
 TRAIN_COLS_NEW = [TIMESTAMP, USER_ID, CONTENT_ID, CONTENT_TYPE_ID, 
@@ -54,29 +60,65 @@ TEST_DTYPES = {
     'prior_question_had_explanation': 'boolean'
 }
 
-class conf:
-    METRIC_ = "max"
-    FILLNA_VAL = 14_000 # for prior question elapsed time, rounded average in train
-    TQDM_INT = 8
-    WORKERS = 8 # 0
-    BATCH_SIZE = 1024
-    VAL_BATCH_SIZE = 4096
-    LEARNING_RATE = 1e-3
-    NUM_EMBED = 128
-    NUM_HEADS = 8
-    NUM_SKILLS = 13523 # len(skills)
-    NUM_TIME = 300 # when scaled by 1000 and round, priori question time's unique values
-    MAX_SEQ = 150
-    SCALING = 2 # scaling before sigmoid
-    PATIENCE = 8 # overfit patience
+'''
+Model and training hyperparams
+'''
+MAX_SEQ = 150
+NUM_EMBED = 128
+NUM_HEADS = 8
+NUM_SKILLS = 13523 # len(skills)
+NUM_TIME = 300 # when scaled by 1000 and round, priori question time's unique values
+LEARNING_RATE = 1e-3
+PATIENCE = 8 # overfit patience
 
-    if torch.cuda.is_available():
-        map_location = lambda storage, loc: storage.cuda()
+'''
+System setup
+'''
+TQDM_INT = 8
+WORKERS = 8 # 0
+METRIC_ = "max"
+if torch.cuda.is_available():
+    map_location = lambda storage, loc: storage.cuda()
+else:
+    map_location='cpu'
+
+
+def preprocess_sakt(df,train_flag=1):
+    '''
+    Train: train_flag=1
+    Valid: train_flag=2
+    Test: train_flag=0
+    '''
+    df = df[df[CONTENT_TYPE_ID] == False].reset_index(drop = True)
+
+    if train_flag == 1:
+        df = df.sort_values([TIMESTAMP], ascending=True).reset_index(drop = True)
+
+    df[PRIOR_QUESTION_TIME].fillna(FILLNA_VAL, inplace=True) 
+        # FILLNA_VAL different than all current values
+    df[PRIOR_QUESTION_TIME] = round(df[PRIOR_QUESTION_TIME] / TIME_SCALING).astype(np.int16)
+    df[PRIOR_QUESTION_EXPLAIN] = df[PRIOR_QUESTION_EXPLAIN].astype(np.float16).fillna(0).astype(np.int8)
+
+    df = df[df[CONTENT_TYPE_ID] == False]
+    
+
+    if train_flag:
+        group = df[[USER_ID, CONTENT_ID, PRIOR_QUESTION_TIME, PRIOR_QUESTION_EXPLAIN, TARGET]]\
+            .groupby(USER_ID)\
+            .apply(lambda r: (r[CONTENT_ID].values, 
+                            r[PRIOR_QUESTION_TIME].values,
+                            r[PRIOR_QUESTION_EXPLAIN].values,
+                            r[TARGET].values))
     else:
-        map_location='cpu'
+        group = df[[USER_ID, CONTENT_ID, PRIOR_QUESTION_TIME, PRIOR_QUESTION_EXPLAIN]]\
+            .groupby(USER_ID)\
+            .apply(lambda r: (r[CONTENT_ID].values, 
+                            r[PRIOR_QUESTION_TIME].values,
+                            r[PRIOR_QUESTION_EXPLAIN].values))
+    return group
 
 class SAKTDataset(Dataset):
-    def __init__(self, group, n_skill, max_seq=conf.MAX_SEQ):
+    def __init__(self, group, n_skill, max_seq=MAX_SEQ):
         super(SAKTDataset, self).__init__()
         self.max_seq = max_seq
         self.n_skill = n_skill # 13523
@@ -130,7 +172,7 @@ class SAKTDataset(Dataset):
 
 
 class SAKTDatasetNew(Dataset):
-    def __init__(self, group, n_skill, subset="train", max_seq=conf.MAX_SEQ):
+    def __init__(self, group, n_skill, subset="train", max_seq=MAX_SEQ):
         super(SAKTDatasetNew, self).__init__()
         self.max_seq = max_seq
         self.n_skill = n_skill # 13523
@@ -214,7 +256,7 @@ class SAKTDatasetNew(Dataset):
 
 
 class TestDataset(Dataset):
-    def __init__(self, samples, test_df, n_skills, max_seq=conf.MAX_SEQ):
+    def __init__(self, samples, test_df, n_skills, max_seq=MAX_SEQ):
         super(TestDataset, self).__init__()
         self.samples = samples
         self.user_ids = [x for x in test_df["user_id"].unique()]
@@ -255,7 +297,7 @@ class TestDataset(Dataset):
         return x, questions
 
 class TestDatasetNew(Dataset):
-    def __init__(self, samples, test_df, n_skills, max_seq=conf.MAX_SEQ):
+    def __init__(self, samples, test_df, n_skills, max_seq=MAX_SEQ):
         super(TestDatasetNew, self).__init__()
         self.samples = samples
         self.user_ids = [x for x in test_df["user_id"].unique()]
@@ -309,7 +351,7 @@ class TestDatasetNew(Dataset):
         return x, questions, prior_q_time, prior_q_explain
 
 class FFN(nn.Module):
-    def __init__(self, state_size=conf.NUM_EMBED, num_query=1):
+    def __init__(self, state_size=NUM_EMBED, num_query=1):
         super(FFN, self).__init__()
         self.state_size = state_size
 
@@ -331,8 +373,9 @@ def future_mask(seq_length):
 
 
 class SAKTModel(nn.Module):
-    def __init__(self, n_skill, max_seq=conf.MAX_SEQ, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS):
+    def __init__(self, n_skill, max_seq=MAX_SEQ, embed_dim=NUM_EMBED, num_heads=NUM_HEADS):
         super(SAKTModel, self).__init__()
+        self.__name__ = 'sakt'
         self.n_skill = n_skill
         self.embed_dim = embed_dim
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -373,8 +416,9 @@ class SAKTModel(nn.Module):
         return x.squeeze(-1), att_weight
 
 class SAKTModelNew(nn.Module):
-    def __init__(self, n_skill, max_seq=conf.MAX_SEQ, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS):
+    def __init__(self, n_skill, max_seq=MAX_SEQ, embed_dim=NUM_EMBED, num_heads=NUM_HEADS):
         super(SAKTModelNew, self).__init__()
+        self.__name__ = 'saktnew'
         self.n_skill = n_skill
         self.embed_dim = embed_dim
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -383,7 +427,7 @@ class SAKTModelNew(nn.Module):
         self.pos_embedding = nn.Embedding(max_seq-1, embed_dim)
         self.e_embedding = nn.Embedding(n_skill+1, embed_dim)
         # embedding of prior question time
-        self.pqt_embedding = nn.Embedding(conf.NUM_TIME+1, embed_dim) 
+        self.pqt_embedding = nn.Embedding(NUM_TIME+1, embed_dim) 
         # embedding of priori question answered
         self.pa_embedding = nn.Embedding(2+1, embed_dim) 
 
@@ -395,8 +439,7 @@ class SAKTModelNew(nn.Module):
         self.ffn = FFN(embed_dim)
         # self.fc1 = nn.Linear(embed_dim, embed_dim)
         self.pred = nn.Linear(embed_dim, 1)
-        self.leakyrelu = nn.LeakyReLU()
-        # self.scaling = conf.SCALING
+        # self.leakyrelu = nn.LeakyReLU()
     
     def forward(self, x, question_ids, prior_question_time=None, prior_question_explain=None):
         '''
@@ -433,15 +476,16 @@ class SAKTModelNew(nn.Module):
 
         x = self.ffn(att_output)
         x = self.layer_normal(x + att_output) # original
-        x = self.leakyrelu(x)
+        # x = self.leakyrelu(x)
         x = self.pred(x)
 
         return x.squeeze(-1), att_weight
 
 
 class SAKTMulti(nn.Module):
-    def __init__(self, n_skill, max_seq=conf.MAX_SEQ, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS):
+    def __init__(self, n_skill, max_seq=MAX_SEQ, embed_dim=NUM_EMBED, num_heads=NUM_HEADS):
         super(SAKTMulti, self).__init__()
+        self.__name__ = 'saktmulti'
         self.n_skill = n_skill
         self.embed_dim = embed_dim
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -450,7 +494,7 @@ class SAKTMulti(nn.Module):
         self.pos_embedding = nn.Embedding(max_seq-1, embed_dim)
         self.e_embedding = nn.Embedding(n_skill+1, embed_dim)
         # embedding of prior question time
-        self.pqt_embedding = nn.Embedding(conf.NUM_TIME+1, embed_dim) 
+        self.pqt_embedding = nn.Embedding(NUM_TIME+1, embed_dim) 
         # embedding of priori question answered
         self.pa_embedding = nn.Embedding(2+1, embed_dim) 
 
@@ -512,7 +556,7 @@ class SAKTMulti(nn.Module):
         att_output = torch.cat((att_output1, att_output2, att_output3), dim=2)
         x = self.ffn(att_output)
         x = self.layer_normal1(x + att_output) # original
-        x = self.leakyrelu(x)
+        # x = self.leakyrelu(x)
         x = self.pred(x)
 
         return x.squeeze(-1), [att_weight1, att_weight2, att_weight3]
@@ -553,9 +597,9 @@ def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
             #outs.extend(output.view(-1).data.cpu().numpy())
             outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
 
-            if idx % conf.TQDM_INT == 0:
+            if idx % TQDM_INT == 0:
                 pbar.set_description(f'train loss - {train_loss[-1]:.4f}')
-                pbar.update(conf.TQDM_INT)
+                pbar.update(TQDM_INT)
     
     acc = num_corrects / num_total
     auc = roc_auc_score(labels, outs)
@@ -637,9 +681,9 @@ def train_epoch_new(model, train_iterator, optim, criterion, device="cuda"):
             #outs.extend(output.view(-1).data.cpu().numpy())
             outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
 
-            if idx % conf.TQDM_INT == 0:
+            if idx % TQDM_INT == 0:
                 pbar.set_description(f'train loss - {train_loss[-1]:.4f}')
-                pbar.update(conf.TQDM_INT)
+                pbar.update(TQDM_INT)
     
     acc = num_corrects / num_total
     auc = roc_auc_score(labels, outs)
@@ -688,7 +732,7 @@ def valid_epoch_new(model, valid_iterator, criterion, device="cuda"):
 
 
 def run_train(model, train_iterator, valid_iterator, optim, scheduler, criterion, 
-              epochs=40, device="cuda"):
+              epochs=40, device="cuda", conf=None):
     history = []
     auc_max = -np.inf
     val_loss = -np.inf
@@ -701,6 +745,7 @@ def run_train(model, train_iterator, valid_iterator, optim, scheduler, criterion
         train_loss = []
         num_corrects = 0
         num_total = 0
+        over_fit = 0
         labels = []
         outs = []
 
@@ -733,12 +778,11 @@ def run_train(model, train_iterator, valid_iterator, optim, scheduler, criterion
                 num_total += len(label)
 
                 labels.extend(label.view(-1).data.cpu().numpy())
-                #outs.extend(output.view(-1).data.cpu().numpy())
                 outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
 
-                if idx % conf.TQDM_INT == 0:
+                if idx % TQDM_INT == 0:
                     pbar.set_description(f'train loss - {train_loss[-1]:.4f} val loss - {val_loss:.4f}')
-                    pbar.update(conf.TQDM_INT)
+                    pbar.update(TQDM_INT)
         
         train_acc = num_corrects / num_total
         train_auc = roc_auc_score(labels, outs)
@@ -757,14 +801,23 @@ def run_train(model, train_iterator, valid_iterator, optim, scheduler, criterion
         if val_auc > auc_max:
             print(f"[Epoch {epoch}/{epochs}] auc improved from {auc_max:.6f} to {val_auc:.6f}") 
             auc_max = val_auc
-            torch.save(model.state_dict(), 
-            os.path.join(MODEL_DIR, 
-            f"sakt_head_{conf.NUM_HEADS}_embed_{conf.NUM_EMBED}_seq_{conf.MAX_SEQ}_auc_{val_auc:.4f}.pt"))
+            over_fit = 0
+            if val_auc > 0.75:
+                model_name = f"{model.__name__}_head_{conf.NUM_HEADS}_embed_{conf.NUM_EMBED}_seq_{conf.MAX_SEQ}"
+                model_name += f"_auc_{val_auc:.4f}.pt"
+                torch.save(model.state_dict(), os.path.join(MODEL_DIR, model_name))
+                print("Best epoch model saved.\n\n")
+        else:
+            over_fit += 1
+
+        if over_fit >= conf.PATIENCE:
+            print(f"\nEarly stop epoch at {epoch}")
+            break
     return model, history
 
 
 def run_train_new(model, train_iterator, valid_iterator, optim, scheduler, criterion, 
-              epochs=60, device="cuda"):
+              epochs=60, device="cuda", conf=None):
     history = []
     auc_max = -np.inf
     val_loss = -np.inf
@@ -814,9 +867,9 @@ def run_train_new(model, train_iterator, valid_iterator, optim, scheduler, crite
                 #outs.extend(output.view(-1).data.cpu().numpy())
                 outs.extend(torch.sigmoid(output).view(-1).data.cpu().numpy())
 
-                if idx % conf.TQDM_INT == 0:
+                if idx % TQDM_INT == 0:
                     pbar.set_description(f'train loss - {train_loss[-1]:.4f} val loss - {val_loss:.4f}')
-                    pbar.update(conf.TQDM_INT)
+                    pbar.update(TQDM_INT)
         
         train_acc = num_corrects / num_total
         train_auc = roc_auc_score(labels, outs)
@@ -837,10 +890,10 @@ def run_train_new(model, train_iterator, valid_iterator, optim, scheduler, crite
             auc_max = val_auc
             over_fit = 0
             if val_auc > 0.75:
-                torch.save(model.state_dict(), 
-                os.path.join(MODEL_DIR, 
-                f"sakt_head_{conf.NUM_HEADS}_embed_{conf.NUM_EMBED}_seq_{conf.MAX_SEQ}_auc_{val_auc:.4f}.pt"))
-                print("Saving model ...\n\n")
+                model_name = f"{model.__name__}_head_{conf.NUM_HEADS}_embed_{conf.NUM_EMBED}_seq_{conf.MAX_SEQ}"
+                model_name += f"_auc_{val_auc:.4f}.pt"
+                torch.save(model.state_dict(), os.path.join(MODEL_DIR, model_name))
+                print("Best epoch model saved.\n\n")
         else:
             over_fit += 1
 
@@ -850,41 +903,47 @@ def run_train_new(model, train_iterator, valid_iterator, optim, scheduler, crite
     return model, history
 
 
-def load_sakt_model(model_file, device='cuda', structure=None):
+def load_sakt_model(model_file, device='cuda'):
     # creating the model and load the weights
-    if structure is None:
-        model = SAKTModel(conf.NUM_SKILLS, embed_dim=conf.NUM_EMBED)
+    configs = []
+    model_file_lst = model_file.split('_')
+    for c in ['head', 'embed', 'seq']:
+        idx = model_file_lst.index(c) + 1
+        configs.append(int(model_file_lst[idx]))
+
+    # configs.append(int(model_file[model_file.rfind('head')+5]))
+    # configs.append(int(model_file[model_file.rfind('embed')+6:model_file.rfind('embed')+9]))
+    # configs.append(int(model_file[model_file.rfind('seq')+4:model_file.rfind('seq')+7]))
+    conf_dict = dict(n_skill=NUM_SKILLS,
+                     num_heads=configs[0],
+                     embed_dim=configs[1], 
+                     max_seq=configs[2], 
+                     )
+
+    if 'saktmulti' in model_file:
+        model = SAKTMulti(**conf_dict)
+        conf_dict['model_name'] = 'SaktMulti'
+    elif 'saktnew' in model_file:
+        model = SAKTModelNew(**conf_dict)
+        conf_dict['model_name'] = 'SaktNew'
     else:
-        model = SAKTModel(structure['n_skills'], 
-                          embed_dim=structure['n_embed'], 
-                          num_heads=structure['n_head'])
+        model = SAKTModel(**conf_dict)
+        conf_dict['model_name'] = 'SaktOrig'
+        
     model = model.to(device)
     model.load_state_dict(torch.load(model_file, map_location=device))
 
-    return model
-
-def load_sakt_model_new(model_file, device='cuda', structure=None):
-    # creating the model and load the weights
-    if structure is None:
-        model = SAKTModelNew(conf.NUM_SKILLS, embed_dim=conf.NUM_EMBED)
-    else:
-        model = SAKTModelNew(structure['n_skills'], 
-                          embed_dim=structure['n_embed'], 
-                          num_heads=structure['n_head'])
-    model = model.to(device)
-    model.load_state_dict(torch.load(model_file, map_location=device))
-
-    return model
+    return model, conf_dict
 
 def find_sakt_model(model_dir=MODEL_DIR, model_file=None):
     # find the best AUC model, or a given model
     if model_file is None:
         try:
             model_files = find_files('sakt', model_dir)
-            tmp = [s.rsplit('.')[-2] for s in model_files]
-            model_file = model_files[argmax(tmp)]
+            auc_scores = [s.rsplit('.')[-2] for s in model_files]
+            model_file = model_files[argmax(auc_scores)]
         except:
-            FileExistsError('model file not found')
+            FileExistsError('Model file not found.')
     return model_file
 
 
@@ -986,7 +1045,7 @@ class HNAGOptimizer(Optimizer):
 
 if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = SAKTModel(conf.NUM_SKILLS, embed_dim=conf.NUM_EMBED)
+    model = SAKTModel(NUM_SKILLS, embed_dim=NUM_EMBED)
     num_params = get_num_params(model)
     print(f"\nVanilla SAKT # params: {num_params}")
     # print(model)
@@ -995,12 +1054,18 @@ if __name__ == "__main__":
     #     model = load_sakt_model(model_file)
     #     print(f"Loaded {model_file}.")
 
-    model = SAKTModelNew(conf.NUM_SKILLS, embed_dim=conf.NUM_EMBED)
+    model = SAKTModelNew(NUM_SKILLS, embed_dim=NUM_EMBED)
     num_params = get_num_params(model)
     print(f"\nNew SAKT with more embeddings # params: {num_params}")
     # print(model)
 
-    model = SAKTMulti(conf.NUM_SKILLS, embed_dim=conf.NUM_EMBED)
+    model = SAKTMulti(NUM_SKILLS, embed_dim=NUM_EMBED)
     num_params = get_num_params(model)
     print(f"\nMulti Attention layer SAKT # params: {num_params}")
     # print(model)
+
+    model_file = find_sakt_model()
+    print(f"\nFound model at {model_file}")
+    model, conf_dict = load_sakt_model(model_file)
+    print(f"\nLoaded model with {conf_dict}")
+

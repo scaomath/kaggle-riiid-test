@@ -45,6 +45,7 @@ which is an implementation of this paper: https://arxiv.org/pdf/1907.06837.pdf
 To-do:
 
 1. check the bias of the prediction
+2. replicate the no cv result on kaggle with LB 0.771
 
 '''
 
@@ -52,13 +53,33 @@ TQDM_INT = 8
 HOME =  "/home/scao/Documents/kaggle-riiid-test/"
 MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
 DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
-STAGE = "stage1"
 FOLD = 1
 
 TRAIN = True
 PREPROCESS = False
 EPOCHS = 60
 LEARNING_RATE = 1e-3
+PATIENCE = 5
+DATE_STR = get_date()
+
+class conf:
+    METRIC_ = "max"
+    FILLNA_VAL = 14_000 # for prior question elapsed time, rounded average in train
+    TQDM_INT = 8
+    WORKERS = 8 # 0
+    LEARNING_RATE = 1e-3
+    NUM_EMBED = 128
+    NUM_HEADS = 8
+    NUM_SKILLS = 13523 # len(skills)
+    NUM_TIME = 300 # when scaled by 1000 and round, priori question time's unique values
+    MAX_SEQ = 150
+    SCALING = 2 # scaling before sigmoid
+    PATIENCE = 8 # overfit patience
+
+    if torch.cuda.is_available():
+        map_location = lambda storage, loc: storage.cuda()
+    else:
+        map_location='cpu'
 
 #%%
 
@@ -74,8 +95,8 @@ if PREPROCESS:
     train_group, valid_group = train_test_split(group, test_size=0.1)
 else: # using preprocessed files
     print("Loading training...")
-    train_df = pd.read_parquet(DATA_DIR+'cv2_train.parquet')
-    valid_df = pd.read_parquet(DATA_DIR+'cv2_valid.parquet')
+    train_df = pd.read_parquet(DATA_DIR+'cv3_train.parquet')
+    valid_df = pd.read_parquet(DATA_DIR+'cv3_valid.parquet')
     train_df = train_df[TRAIN_DTYPES.keys()]
     valid_df = valid_df[TRAIN_DTYPES.keys()]
     train_df = train_df[train_df[CONTENT_TYPE_ID] == False].reset_index(drop = True)
@@ -165,21 +186,22 @@ if TRAIN:
             over_fit = 0
             if valid_auc > 0.75:
                 torch.save(model.state_dict(), 
-                os.path.join(MODEL_DIR, f"sakt_head_{conf.NUM_HEADS}_embed_{conf.NUM_EMBED}_auc_{valid_auc:.4f}.pt"))
+                os.path.join(MODEL_DIR, f"{model.__name__}_head_{conf.NUM_HEADS}_embed_{conf.NUM_EMBED}_seq_{conf.MAX_SEQ}_auc_{valid_auc:.4f}.pt"))
                 print("Saving model ...\n\n")
         else:
             over_fit += 1
         
-        if over_fit >= 5:
+        if over_fit >= PATIENCE:
             print(f"Early stop epoch at {epoch}")
             break
 
-    with open(DATA_DIR+f'history.pickle', 'wb') as handle:
+    with open(DATA_DIR+f'history_{model.__name__}_{DATE_STR}.pickle', 'wb') as handle:
         pickle.dump(history, handle, protocol=pickle.HIGHEST_PROTOCOL)
 else:
     tqdm.write("\nLoading state_dict...\n")
     model_file = find_sakt_model()
-    model.load_state_dict(torch.load(model_file, map_location=device))
+    model, conf_dict = load_sakt_model(model_file)
+    print(f"\nLoaded model with {conf_dict}")
     model.eval()
     valid_loss, valid_acc, valid_auc = valid_epoch(model, val_loader, criterion)
     print(f"\nValid: loss - {valid_loss:.2f} acc - {valid_acc:.4f} auc - {valid_auc:.4f}")

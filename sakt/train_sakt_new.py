@@ -29,7 +29,6 @@ DEFAULT_FIG_WIDTH = 20
 sns.set_context("paper", font_scale=1.2) 
 
 from utils import *
-
 from sakt import *
 
 print('Python     : ' + sys.version.split('\n')[0])
@@ -56,17 +55,37 @@ MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
 DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
 STAGE = "stage1"
 FOLD = 1
-
+DATE_STR = get_date()
 TRAIN = True
-PREPROCESS = False
 DEBUG = False
 EPOCHS = 60
 LEARNING_RATE = 1e-3
 NROWS_TRAIN = 10_000_000
+PREPROCESS = 0
 
+class conf:
+    METRIC_ = "max"
+    FILLNA_VAL = 14_000 # for prior question elapsed time, rounded average in train
+    TQDM_INT = 8
+    WORKERS = 8 # 0
+    LEARNING_RATE = 1e-3
+    BATCH_SIZE = 512
+    VAL_BATCH_SIZE = 4096
+    NUM_EMBED = 128
+    NUM_HEADS = 8
+    NUM_SKILLS = 13523 # len(skills)
+    NUM_TIME = 300 # when scaled by 1000 and round, priori question time's unique values
+    MAX_SEQ = 150
+    SCALING = 2 # scaling before sigmoid
+    PATIENCE = 8 # overfit patience
+
+    if torch.cuda.is_available():
+        map_location = lambda storage, loc: storage.cuda()
+    else:
+        map_location='cpu'
 #%%
-if PREPROCESS:
-    print("\nLoading training...")
+if PREPROCESS == 1:
+    print("\nLoading training csv...")
     start = time()
     if DEBUG:
         data_df = pd.read_csv(DATA_DIR+'train.csv', 
@@ -74,7 +93,7 @@ if PREPROCESS:
                             nrows=NROWS_TRAIN,
                             dtype=TRAIN_DTYPES)
     else:
-        data_df = pd.read_csv(DATA_DIR+'train.csv', usecols=[1, 2, 3, 4, 7, 8, 9], dtype=TRAIN_DTYPES)
+        data_df = pd.read_csv(DATA_DIR+'train.csv', usecols=TRAIN_COLS_NEW, dtype=TRAIN_DTYPES)
     print(f"Loaded train.csv in {time()-start} seconds.\n\n")
 
     print("Processing training...")
@@ -97,14 +116,22 @@ if PREPROCESS:
     with open(DATA_DIR+'sakt_data_new.pickle', 'wb') as f:
         pickle.dump(group, f, protocol=pickle.HIGHEST_PROTOCOL)
     print(f"Prcocessed train.csv in {time()-start} seconds.\n\n")
+    train_group, valid_group = train_test_split(group, test_size=0.1)
+elif PREPROCESS == 2:
+    print("Loading training parquet...")
+    start = time()
+    train_df = pd.read_parquet(DATA_DIR+'cv3_train.parquet')
+    valid_df = pd.read_parquet(DATA_DIR+'cv3_valid.parquet')
+    train_df = train_df[TRAIN_COLS_NEW]
+    valid_df = valid_df[TRAIN_COLS_NEW]
+    train_group = preprocess_sakt(train_df)
+    valid_group = preprocess_sakt(valid_df)
+    print(f"Prcocessed train.parquet in {time()-start} seconds.\n\n")
 else:
     print("\nLoading preprocessed file...")
     with open(DATA_DIR+'sakt_data_new.pickle', 'rb') as f:
         group = pickle.load(f)
-
-
-train_group, valid_group = train_test_split(group, test_size=0.1)
-
+    train_group, valid_group = train_test_split(group, test_size=0.1)
 
 # skills = train_df[CONTENT_ID].unique()
 n_skill = conf.NUM_SKILLS #len(skills) # len(skills) might not have all
@@ -143,7 +170,7 @@ model = SAKTMulti(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS)
 # optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.99, weight_decay=0.005)
 optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 # scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, threshold=0.0001)
-scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, eta_min=LEARNING_RATE*1e-3)
+scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, eta_min=LEARNING_RATE*1e-2)
 # scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=1e-4, max_lr=1e-3)
 # optimizer = HNAGOptimizer(model.parameters(), lr=1e-3) 
 criterion = nn.BCEWithLogitsLoss()
@@ -161,7 +188,7 @@ if TRAIN:
     model, history = run_train_new(model, train_loader, val_loader, 
                                optimizer, scheduler, criterion, 
                                epochs=EPOCHS, device="cuda")
-    with open(DATA_DIR+f'history.pickle', 'wb') as handle:
+    with open(DATA_DIR+f'history_{DATE_STR}.pickle', 'wb') as handle:
         pickle.dump(history, handle, protocol=pickle.HIGHEST_PROTOCOL)
 else:
     tqdm.write("\nLoading state_dict...\n")
