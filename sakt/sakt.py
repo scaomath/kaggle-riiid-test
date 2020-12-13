@@ -473,7 +473,6 @@ class SAKTModelNew(nn.Module):
         att_output, att_weight = self.multi_att(e, x, x, attn_mask=att_mask)
         att_output = self.layer_normal(att_output + e)
         att_output = att_output.permute(1, 0, 2) # att_output: [s_len, bs, embed] => [bs, s_len, embed]
-
         x = self.ffn(att_output)
         x = self.layer_normal(x + att_output) # original
         # x = self.leakyrelu(x)
@@ -500,7 +499,7 @@ class SAKTMulti(nn.Module):
 
         self.multi_att1 = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.2)
         self.multi_att2 = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.2)
-        self.multi_att3 = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.2)
+        self.multi_att3 = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.4)
 
         self.dropout = nn.Dropout(0.2)
         self.layer_normal = nn.LayerNorm(embed_dim) 
@@ -508,7 +507,7 @@ class SAKTMulti(nn.Module):
         self.ffn = FFN(3*embed_dim)
         self.layer_normal1 = nn.LayerNorm(3*embed_dim) 
         self.pred = nn.Linear(3*embed_dim, 1)
-        self.leakyrelu = nn.LeakyReLU()
+        self.relu = nn.ReLU()
     
     def forward(self, x, question_ids, prior_question_time=None, prior_question_explain=None):
         '''
@@ -527,7 +526,6 @@ class SAKTMulti(nn.Module):
         pos_id = torch.arange(x.size(1)).unsqueeze(0).to(device)
         pos_x = self.pos_embedding(pos_id)
         x += pos_x
-
 
         e = self.e_embedding(question_ids)
         pq_x = self.pqt_embedding(prior_question_time)
@@ -555,8 +553,9 @@ class SAKTMulti(nn.Module):
 
         att_output = torch.cat((att_output1, att_output2, att_output3), dim=2)
         x = self.ffn(att_output)
-        x = self.layer_normal1(x + att_output) # original
-        # x = self.leakyrelu(x)
+        # x = self.relu(x)
+        x = self.layer_normal1(x) + att_output # config 1: after normalization then residual
+        # x = self.layer_normal1(x + att_output) # config 2: first residual then normalization
         x = self.pred(x)
 
         return x.squeeze(-1), [att_weight1, att_weight2, att_weight3]
@@ -691,7 +690,7 @@ def train_epoch_new(model, train_iterator, optim, criterion, device="cuda"):
 
     return loss, acc, auc
 
-def valid_epoch_new(model, valid_iterator, criterion, device="cuda"):
+def valid_epoch_new(model, valid_iterator, criterion, device="cuda", conf=None):
     model.eval()
 
     valid_loss = []
@@ -712,7 +711,7 @@ def valid_epoch_new(model, valid_iterator, criterion, device="cuda"):
         loss = criterion(output, label)
         valid_loss.append(loss.item())
 
-        output = output[:, -1] # (BS, 1)
+        output = conf.SCALING*output[:, -1] # (BS, 1)
         label = label[:, -1] 
         pred = (torch.sigmoid(output) >= 0.5).long()
         
@@ -877,7 +876,8 @@ def run_train_new(model, train_iterator, valid_iterator, optim, scheduler, crite
 
         tqdm.write(f"\nTrain: loss - {train_loss:.2f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
 
-        val_loss, val_acc, val_auc = valid_epoch_new(model, valid_iterator, criterion, device=device)
+        val_loss, val_acc, val_auc = valid_epoch_new(model, valid_iterator, criterion, 
+                                                     device=device, conf=conf)
         tqdm.write(f"\nValid: loss - {val_loss:.2f} acc - {val_acc:.4f} auc - {val_auc:.4f}")
 
         lr = optim.param_groups[0]['lr']

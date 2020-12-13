@@ -46,7 +46,13 @@ an implementation of this paper: https://arxiv.org/pdf/1907.06837.pdf
 Version notes:
 
 - Increasing seq_len for sakt new model does not work well
-- 
+- Testing performance of the following configs for both attention layers and after concat att outputs:
+1. bn(relu(f(x))) + x, epoch 1 auc 0.7372, epoch 3 auc 0.7422, epoch 5 auc 0.7445 
+2. bn(relu(f(x)) + x), epoch 1 auc 0.7379, epoch 3 auc 0.7413, epoch 5 auc 0.7443
+3. bn(f(x)) + x: epoch 1 auc 0.7369, epoch 3 auc 0.7415, epoch 5 auc 0.7448
+4. bn(f(x) + x): epoch 1 auc 0.7380, epoch 3 auc 0.7418, epoch 5 auc 0.7445
+
+
 '''
 
 TQDM_INT = 8 
@@ -58,9 +64,10 @@ FOLD = 1
 DATE_STR = get_date()
 TRAIN = True
 DEBUG = False
-EPOCHS = 60
+ROLLOUT = False
+EPOCHS = 60 if ROLLOUT else 13
 LEARNING_RATE = 1e-3
-NROWS_TRAIN = 10_000_000
+NROWS_TRAIN = 5_000_000
 PREPROCESS = 0
 
 class conf:
@@ -76,7 +83,7 @@ class conf:
     NUM_SKILLS = 13523 # len(skills)
     NUM_TIME = 300 # when scaled by 1000 and round, priori question time's unique values
     MAX_SEQ = 150
-    SCALING = 2 # scaling before sigmoid
+    SCALING = 1 # scaling before sigmoid
     PATIENCE = 8 # overfit patience
 
     if torch.cuda.is_available():
@@ -187,7 +194,7 @@ print(f"# params : {num_params}")
 if TRAIN:
     model, history = run_train_new(model, train_loader, val_loader, 
                                optimizer, scheduler, criterion, 
-                               epochs=EPOCHS, device="cuda")
+                               epochs=EPOCHS, device="cuda", conf=conf)
     with open(DATA_DIR+f'history_{DATE_STR}.pickle', 'wb') as handle:
         pickle.dump(history, handle, protocol=pickle.HIGHEST_PROTOCOL)
 else:
