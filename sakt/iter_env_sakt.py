@@ -19,7 +19,7 @@ from iter_env import *
 PRIVATE = False
 DEBUG = False
 LAST_N = 100
-VAL_BATCH_SIZE = 25_600
+VAL_BATCH_SIZE = 51_200
 SIMU_PUB_SIZE = 25_000
 MAX_SEQ = 100
 
@@ -120,6 +120,7 @@ with tqdm(total=len_test) as pbar:
 
         current_test[TARGET] = output_all
         set_predict(current_test.loc[:,[ROW_ID, TARGET]])
+        pbar.desc(f'Current batch test length: {len(current_test)}')
         pbar.update(len(current_test))
 
 y_true = test_df[test_df.content_type_id == 0].answered_correctly

@@ -1,4 +1,6 @@
 #%%
+import os
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 import sys
 import psutil
 import pandas as pd
@@ -28,12 +30,14 @@ if DEBUG:
     test_df[:SIMU_PUB_SIZE].to_parquet(DATA_DIR+'test_pub_simu.parquet')
 
 #%%
+print("Loading test set....")
 if PRIVATE:
     test_df = pd.read_pickle(DATA_DIR+'cv2_valid.pickle')
     train_df = pd.read_parquet(DATA_DIR+'cv2_train.parquet')
 else:
     test_df = pd.read_parquet(DATA_DIR+'test_pub_simu.parquet')
     train_df = pd.read_parquet(DATA_DIR+'cv2_valid.parquet')
+print("Loaded test.")
 
 
 train_df[PRIOR_QUESTION_TIME].fillna(conf.FILLNA_VAL, inplace=True) 
@@ -153,14 +157,10 @@ with tqdm(total=len_test) as pbar:
 
         current_test[TARGET] = outs
         set_predict(current_test.loc[:,[ROW_ID, TARGET]])
+        pbar.set_description(f"Current test length: {len(current_test):6d}")
         pbar.update(len(current_test))
 
 y_true = test_df[test_df.content_type_id == 0].answered_correctly
 y_pred = pd.concat(predicted).answered_correctly
 print('\nValidation auc:', roc_auc_score(y_true, y_pred))
 print('# iterations:', len(predicted))
-
-
-# %%
-y_pred.hist()
-# %%

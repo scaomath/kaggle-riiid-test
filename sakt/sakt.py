@@ -1,14 +1,17 @@
-import os, sys
-from tqdm import tqdm
-import numpy as np
-import torch.nn as nn
-import torch
-from torch.autograd import Variable
-from torch.utils.data import Dataset, DataLoader
-from sklearn.metrics import roc_auc_score
-from torchsummary import summary
-from torch.optim import Optimizer
+import os
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+import sys
 
+import numpy as np
+from random import random, randint
+import torch
+import torch.nn as nn
+from sklearn.metrics import roc_auc_score
+from torch.autograd import Variable
+from torch.optim import Optimizer
+from torch.utils.data import DataLoader, Dataset
+from torchsummary import summary
+from tqdm import tqdm
 
 HOME =  "/home/scao/Documents/kaggle-riiid-test/"
 MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
@@ -63,7 +66,7 @@ class conf:
     NUM_HEADS = 8
     NUM_SKILLS = 13523 # len(skills)
     NUM_TIME = 300 # when scaled by 1000 and round, priori question time's unique values
-    MAX_SEQ = 100
+    MAX_SEQ = 160
     SCALING = 2 # scaling before sigmoid
 
     if torch.cuda.is_available():
@@ -72,18 +75,17 @@ class conf:
         map_location='cpu'
 
 class SAKTDataset(Dataset):
-    def __init__(self, group, n_skill, subset="train", max_seq=conf.MAX_SEQ):
+    def __init__(self, group, n_skill, max_seq=conf.MAX_SEQ):
         super(SAKTDataset, self).__init__()
         self.max_seq = max_seq
         self.n_skill = n_skill # 13523
         self.samples = group
-        self.subset = subset
         
         # self.user_ids = [x for x in group.index]
         self.user_ids = []
         for user_id in group.index:
             q, qa = group[user_id]
-            if len(q) < 5: # 5 interactions minimum
+            if len(q) < 2: # 5 interactions minimum
                 continue
             self.user_ids.append(user_id) # user_ids indexes
 
@@ -99,20 +101,22 @@ class SAKTDataset(Dataset):
         qa = np.zeros(self.max_seq, dtype=int)
 
         if seq_len >= self.max_seq:
-            if self.subset == "train":
-                if seq_len > self.max_seq:
-                    random_start_index = np.random.randint(seq_len - self.max_seq)
-                    q[:] = q_[random_start_index:random_start_index + self.max_seq] # Pick 100 questions from a random index
-                    qa[:] = qa_[random_start_index:random_start_index + self.max_seq] # Pick 100 answers from a random index
-                else:
-                    q[:] = q_[-self.max_seq:]
-                    qa[:] = qa_[-self.max_seq:]
+            if random() > 0.1:
+                start_index = randint(seq_len - self.max_seq)
+                end_index = start_index + self.max_seq
+                q[:] = q_[start_index:end_index] # Pick 100 questions from a random index
+                qa[:] = qa_[start_index:end_index] # Pick 100 answers from a random index
             else:
-                q[:] = q_[-self.max_seq:] # Pick last 100 questions
-                qa[:] = qa_[-self.max_seq:] # Pick last 100 answers
+                q[:] = q_[-self.max_seq:]
+                qa[:] = qa_[-self.max_seq:]
         else:
-            q[-seq_len:] = q_ # Pick last N question with zero padding
-            qa[-seq_len:] = qa_ # Pick last N answers with zero padding        
+            if random()>0.1:
+                seq_len = randint(2,seq_len)
+                q[-seq_len:] = q_[:seq_len]
+                qa[-seq_len:] = qa_[:seq_len]
+            else:
+                q[-seq_len:] = q_ # Pick last N question with zero padding
+                qa[-seq_len:] = qa_ # Pick last N answers with zero padding        
                 
         target_id = q[1:] # Ignore first item 1 to 99
         label = qa[1:] # Ignore first item 1 to 99
@@ -142,7 +146,7 @@ class SAKTDatasetNew(Dataset):
             qa: question answer correct or not
             '''
             q, pqt, pqe, qa = group[user_id] 
-            if len(q) < 5: # 5 interactions minimum
+            if len(q) < 2: # 5 interactions minimum
                 continue
             self.user_ids.append(user_id) # user_ids indexes
 
@@ -161,8 +165,9 @@ class SAKTDatasetNew(Dataset):
 
         if seq_len >= self.max_seq:
             if self.subset == "train":
-                if seq_len > self.max_seq:
-                    random_start_index = np.random.randint(seq_len - self.max_seq)
+                # if seq_len > self.max_seq:
+                if random() > 0.1:
+                    random_start_index = randint(seq_len - self.max_seq)
                     '''
                     Pick 100 questions, answers, prior question time, 
                     priori question explain from a random index
@@ -421,8 +426,8 @@ class SAKTModelNew(nn.Module):
         att_output = att_output.permute(1, 0, 2) # att_output: [s_len, bs, embed] => [bs, s_len, embed]
 
         x = self.ffn(att_output)
-        x = self.leakyrelu(x)
         x = self.layer_normal(x + att_output) # original
+        x = self.leakyrelu(x)
         x = self.pred(x)
 
         return x.squeeze(-1), att_weight

@@ -102,13 +102,13 @@ print("valid by user:", len(valid_group))
 print("train by user:", len(train_group))
 
 # %%
-train_dataset = SAKTDataset(train_group, n_skill, subset="train")
+train_dataset = SAKTDataset(train_group, n_skill)
 train_loader = DataLoader(train_dataset, 
                               batch_size=conf.BATCH_SIZE, 
                               shuffle=True, 
                               num_workers=conf.WORKERS)
 
-valid_dataset = SAKTDataset(valid_group, n_skill, subset="valid")
+valid_dataset = SAKTDataset(valid_group, n_skill)
 val_loader = DataLoader(valid_dataset, 
                               batch_size=conf.VAL_BATCH_SIZE, 
                               shuffle=False, 

@@ -29,14 +29,16 @@ ROW_ID = 'row_id'
 NROWS_TRAIN = 1_000_000
 NROWS_VALID = 10_000
 
-DEBUG = True
+DEBUG = False
 VALIDATION = False
+MAX_EPOCH = 50
 
+BATCH_SIZE = 2**13
 # %%
 start = time()
 print("Loading training...")
-train_df = pd.read_parquet(DATA_DIR+'cv2_train.parquet')
-valid_df = pd.read_parquet(DATA_DIR+'cv2_valid.parquet')
+train_df = pd.read_parquet(DATA_DIR+'cv1_train.parquet')
+valid_df = pd.read_parquet(DATA_DIR+'cv1_valid.parquet')
 questions_df = pd.read_csv(DATA_DIR+'questions.csv')
 print(f"Loaded training in {time()-start} seconds.")
 # %%
@@ -72,11 +74,11 @@ def update_user_feats(df, answered_correctly_sum_u_dict, count_u_dict):
             count_u_dict[row[0]] += 1
 # %%
 
-features_col = [ROW_ID, USER_ID, CONTENT_ID, CONTENT_TYPE_ID, 
+feature_cols = [ROW_ID, USER_ID, CONTENT_ID, CONTENT_TYPE_ID, 
                 TARGET, PRIOR_QUESTION_TIME, PRIOR_QUESTION_EXPLAIN]
-train_df = train_df[features_col]
-valid_df = valid_df[features_col]
-# %%
+train_df = train_df[feature_cols]
+valid_df = valid_df[feature_cols]
+
 if DEBUG:
     train_df = train_df[:NROWS_TRAIN]
     valid_df = valid_df[:NROWS_VALID]
@@ -125,7 +127,7 @@ y_tr = train_df[TARGET]
 y_va = valid_df[TARGET]
 train_df.drop(drop_cols, axis=1, inplace=True)
 valid_df.drop(drop_cols, axis=1, inplace=True)
-_=gc.collect()
+gc.collect();
 
 
 X_train, y_train = train_df[FEATS].values, y_tr.values
@@ -137,4 +139,60 @@ X_train = np.nan_to_num(X_train, nan=-1)
 X_valid = np.nan_to_num(X_valid, nan=-1)
 
 del train_df, y_tr
-_=gc.collect()
+gc.collect();
+# %% the reference model
+# model = TabNetClassifier(n_d=64, n_a=32, n_steps=2, gamma=1.2,
+#                          n_independent=2, n_shared=2,
+#                          lambda_sparse=0., seed=0,
+#                          clip_value=1,
+#                          mask_type='entmax',
+#                          device_name='cuda',
+#                          optimizer_fn=torch.optim.Adam,
+#                          optimizer_params=dict(lr=2e-2),
+#                          scheduler_params=dict(max_lr=0.05,
+#                                                steps_per_epoch=int(X_train.shape[0] / BATCH_SIZE),
+#                                                epochs=MAX_EPOCH,
+#                                                final_div_factor=1e3,
+#                                                is_batch_level=True),
+#                          scheduler_fn=torch.optim.lr_scheduler.OneCycleLR,
+#                          verbose=1,)
+
+# model.fit(X_train=X_train, y_train=y_train,
+#           eval_set=[(X_valid, y_valid)],
+#           eval_name=["valid"],
+#           eval_metric=["auc"],
+#           batch_size=BATCH_SIZE,
+#           virtual_batch_size=256,
+#           max_epochs=MAX_EPOCH,
+#           drop_last=True,
+#           pin_memory=True
+#          )
+
+#%% modification 1
+
+model = TabNetClassifier(n_d=64, n_a=32, n_steps=2, gamma=1.2,
+                         n_independent=2, n_shared=2,
+                         lambda_sparse=0, seed=1127,
+                         clip_value=1.,
+                         mask_type='entmax',
+                         device_name='cuda',
+                         optimizer_fn=torch.optim.Adam,
+                         optimizer_params=dict(lr=1e-3),
+                         scheduler_params=dict(T_0=5,
+                                               eta_min=1e-5),
+                         scheduler_fn=torch.optim.lr_scheduler.CosineAnnealingWarmRestarts,
+                         verbose=1,)
+
+model.fit(X_train=X_train, y_train=y_train,
+          eval_set=[(X_valid, y_valid)],
+          eval_name=["valid"],
+          eval_metric=["auc"],
+          batch_size=BATCH_SIZE,
+          patience=10,
+          virtual_batch_size=128,
+          max_epochs=MAX_EPOCH,
+          drop_last=True,
+          pin_memory=True,
+         )
+
+# %%

@@ -19,8 +19,8 @@ def get_seed(s):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(s)
 
-SEED = 1127 
-get_seed(SEED)
+# SEED = 1127 
+# get_seed(SEED)
 
 @contextmanager
 def timer(title):
