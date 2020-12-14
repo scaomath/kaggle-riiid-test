@@ -1,4 +1,5 @@
 import gc
+import sys
 import os
 os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 import random as rd
@@ -7,10 +8,18 @@ from time import time
 from datetime import date
 
 import numpy as np
+import pandas as pd
 import psutil
 import torch
 from sklearn.metrics import roc_auc_score
 
+def get_system():
+    print('Python     : ' + sys.version.split('\n')[0])
+    print('Numpy      : ' + np.__version__)
+    print('Pandas     : ' + pd.__version__)
+    print('PyTorch    : ' + torch.__version__)
+    DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    print(f'Device     : {DEVICE}')
 
 def get_seed(s):
     rd.seed(s)

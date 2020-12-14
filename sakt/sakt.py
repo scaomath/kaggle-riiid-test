@@ -67,6 +67,8 @@ MAX_SEQ = 150
 NUM_EMBED = 128
 NUM_HEADS = 8
 NUM_SKILLS = 13523 # len(skills)
+NUM_HIDDEN = 128
+NUM_LAYERS = 2
 NUM_TIME = 300 # when scaled by 1000 and round, priori question time's unique values
 LEARNING_RATE = 1e-3
 PATIENCE = 8 # overfit patience
@@ -416,7 +418,13 @@ class SAKTModel(nn.Module):
         return x.squeeze(-1), att_weight
 
 class SAKTModelNew(nn.Module):
-    def __init__(self, n_skill, max_seq=MAX_SEQ, embed_dim=NUM_EMBED, num_heads=NUM_HEADS):
+    def __init__(self, n_skill, 
+                       max_seq=MAX_SEQ, 
+                       embed_dim=NUM_EMBED, 
+                       num_heads=NUM_HEADS, 
+                    #    num_hid=NUM_HIDDEN,
+                    #    num_layers=NUM_LAYERS,
+                       ):
         super(SAKTModelNew, self).__init__()
         self.__name__ = 'saktnew'
         self.n_skill = n_skill
@@ -432,6 +440,11 @@ class SAKTModelNew(nn.Module):
         self.pa_embedding = nn.Embedding(2+1, embed_dim) 
 
         self.multi_att = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.2)
+        self.multi_att2 = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads//2, dropout=0.2)
+
+        # encoder_layers = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=num_heads, 
+        #                                 dim_feedforward=num_hid, dropout=0.2, activation='relu')
+        # self.transformer_encoder = nn.TransformerEncoder(encoder_layer=encoder_layers, num_layers=num_layers)
 
         self.dropout = nn.Dropout(0.2)
         self.layer_normal = nn.LayerNorm(embed_dim) 
@@ -472,7 +485,11 @@ class SAKTModelNew(nn.Module):
 
         att_output, att_weight = self.multi_att(e, x, x, attn_mask=att_mask)
         att_output = self.layer_normal(att_output + e)
+        att_output, att_weight = self.multi_att2(e, att_output, att_output, attn_mask=att_mask)
+        att_output = self.layer_normal(att_output + e)
+
         att_output = att_output.permute(1, 0, 2) # att_output: [s_len, bs, embed] => [bs, s_len, embed]
+
         x = self.ffn(att_output)
         x = self.layer_normal(x + att_output) # original
         # x = self.leakyrelu(x)
@@ -497,7 +514,7 @@ class SAKTMulti(nn.Module):
         # embedding of priori question answered
         self.pa_embedding = nn.Embedding(2+1, embed_dim) 
 
-        self.multi_att1 = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.2)
+        self.multi_att1 = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.1)
         self.multi_att2 = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.2)
         self.multi_att3 = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.4)
 

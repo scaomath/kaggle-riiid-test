@@ -13,10 +13,11 @@ import torch
 HOME =  "/home/scao/Documents/kaggle-riiid-test/"
 DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
 MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
-sys.path.append(HOME)
+# sys.path.append(HOME)
 from sakt import *
 from utils import *
 from iter_env import *
+# from common import *
 
 PRIVATE = False
 DEBUG = False
@@ -24,6 +25,27 @@ LAST_N = 100
 VAL_BATCH_SIZE = 25_600
 SIMU_PUB_SIZE = 25_000
 MAX_SEQ = 100
+
+class conf:
+    METRIC_ = "max"
+    FILLNA_VAL = 14_000 # for prior question elapsed time, rounded average in train
+    TQDM_INT = 8
+    WORKERS = 8 # 0
+    LEARNING_RATE = 1e-3
+    BATCH_SIZE = 512
+    VAL_BATCH_SIZE = 4096
+    NUM_EMBED = 128
+    NUM_HEADS = 8
+    NUM_SKILLS = 13523 # len(skills)
+    NUM_TIME = 300 # when scaled by 1000 and round, priori question time's unique values
+    MAX_SEQ = 150
+    SCALING = 1 # scaling before sigmoid
+    PATIENCE = 8 # overfit patience
+
+    if torch.cuda.is_available():
+        map_location = lambda storage, loc: storage.cuda()
+    else:
+        map_location='cpu'
 
 if DEBUG:
     test_df = pd.read_parquet(DATA_DIR+'cv2_valid.parquet')

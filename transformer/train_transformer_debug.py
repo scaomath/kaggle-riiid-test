@@ -18,6 +18,13 @@ from torch.autograd import Variable
 from torchsummary import summary
 
 from sklearn.metrics import roc_auc_score
+
+
+HOME =  "/home/scao/Documents/kaggle-riiid-test/"
+MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
+DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
+
+sys.path.append(HOME)
 from utils import *
 from transformer import *
 # %%
@@ -50,10 +57,6 @@ TEST_DTYPES = {
     'prior_question_had_explanation': 'boolean'
 }
 
-
-DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
-FOLD = 1
-MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/fold{FOLD}/snapshots/'
 LAST_N = 100 # this parameter denotes how many last seen content_ids I am going to consider <aka the max_seq_len or the window size>.
 TAIL_N = 100 # used for validation set per user_id
 FILLNA_VAL = 100 # fillers for the values (a unique value)
@@ -64,12 +67,12 @@ VAL_BATCH_SIZE = 2048
 
 NROWS_TRAIN = 5_000_000
 NROWS_VALID = 2_000_000
-NROWS_TEST = 60
+NROWS_TEST = 600
 
 EPOCHS = 5
 
 DEBUG = True
-TRAIN = True
+TRAIN = False
 
 
 # %% Preparing train and validation set
@@ -106,10 +109,11 @@ sample = next(iter(DataLoader(dataset=dataset_train,
 # createing the mdoel
 model = TransformerModel(ninp=LAST_N, nhead=4, nhid=128, nlayers=3, dropout=0.3)
 model = model.to(device)
+print(model)
 # %% training and validation
 losses = []
 history = []
-auc_max = -np.inf
+auc_max = 0
 
 # criterion = nn.BCEWithLogitsLoss()
 criterion = nn.CrossEntropyLoss()
@@ -120,9 +124,9 @@ dataset_train = DataLoader(dataset=dataset_train, batch_size=BATCH_SIZE, collate
 
 dataset_val = DataLoader(dataset=dataset_val, batch_size=VAL_BATCH_SIZE, collate_fn=collate_fn, drop_last=True)
 
-snapshot_path = "%s/fold%d/snapshots" % (MODEL_DIR, FOLD)
-if not os.path.exists(snapshot_path):
-    os.makedirs(snapshot_path)
+# snapshot_path = "%s/fold%d/snapshots" % (MODEL_DIR, FOLD)
+# if not os.path.exists(snapshot_path):
+#     os.makedirs(snapshot_path)
 
 
 #%%
@@ -142,11 +146,14 @@ if TRAIN:
             print(f"[Epoch {epoch}/{EPOCHS}] auc improved from {auc_max:.4f} to {valid_auc:.4f}") 
             print("saving model ...")
             auc_max = valid_auc
-            torch.save(model.state_dict(), os.path.join(snapshot_path, "model_best_epoch.pt"))
+            torch.save(model.state_dict(), os.path.join(MODEL_DIR, "model_best_epoch.pt"))
 else:
-    print("Loading state_dict...")
-    model.load_state_dict(torch.load(MODEL_DIR+'model_best_epoch.pt', map_location=device))
-    model.eval()
+    try:
+        print("Loading state_dict...")
+        model.load_state_dict(torch.load(MODEL_DIR+'model_best_epoch.pt', map_location=device))
+        model.eval()
+    except:
+        FileExistsError("No model found.")
 # %%
 # if not TRAIN and DEBUG:
 #     for batch in dataset_train:

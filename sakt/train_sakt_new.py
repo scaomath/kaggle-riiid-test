@@ -1,7 +1,7 @@
 #%%
 import gc
 import sys
-sys.path.append("..") 
+
 import pickle
 from time import time
 
@@ -12,10 +12,12 @@ import pandas as pd
 import seaborn as sns
 import torch
 import torch.nn as nn
+from torch import optim
 import torch.nn.utils.rnn as rnn_utils
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 from torch.autograd import Variable
+import torch.optim as optim
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import (CosineAnnealingWarmRestarts, CyclicLR,
                                       ReduceLROnPlateau)
@@ -25,16 +27,25 @@ from tqdm import tqdm
 sns.set()
 DEFAULT_FIG_WIDTH = 20
 sns.set_context("paper", font_scale=1.2) 
+# WORKSPACE_FOLDER=/home/scao/Documents/kaggle-riiid-test
+# PYTHONPATH=${WORKSPACE_FOLDER}:${WORKSPACE_FOLDER}/sakt:${WORKSPACE_FOLDER}/transformer
 
+HOME =  "/home/scao/Documents/kaggle-riiid-test/"
+MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
+DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
+sys.path.append(HOME) 
 from utils import *
-from sakt import *
+get_system()
 
-print('Python     : ' + sys.version.split('\n')[0])
-print('Numpy      : ' + np.__version__)
-print('Pandas     : ' + pd.__version__)
-print('PyTorch    : ' + torch.__version__)
-DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-print(f'Device     : {DEVICE}')
+from sakt import *
+from transformer_optimizers import *
+
+# print('Python     : ' + sys.version.split('\n')[0])
+# print('Numpy      : ' + np.__version__)
+# print('Pandas     : ' + pd.__version__)
+# print('PyTorch    : ' + torch.__version__)
+# DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+# print(f'Device     : {DEVICE}')
 '''
 https://www.kaggle.com/mpware/sakt-fork
 Self-Attentive model for Knowledge Tracing model (SAKT)
@@ -47,16 +58,14 @@ Version notes:
 - Testing performance of the following configs for both attention layers and after concat att outputs:
 1. bn(relu(f(x))) + x, epoch 1 auc 0.7372, epoch 3 auc 0.7422, epoch 5 auc 0.7445 
 2. bn(relu(f(x)) + x), epoch 1 auc 0.7379, epoch 3 auc 0.7413, epoch 5 auc 0.7443
-3. bn(f(x)) + x: epoch 1 auc 0.7369, epoch 3 auc 0.7415, epoch 5 auc 0.7448
-4. bn(f(x) + x): epoch 1 auc 0.7380, epoch 3 auc 0.7418, epoch 5 auc 0.7445
-
-
+3. bn(f(x)) + x: epoch 0 auc 0.7369, epoch 2 auc 0.7415, epoch 4 auc 0.7448
+4. bn(f(x) + x): epoch 0 auc 0.7380, epoch 2 auc 0.7418, epoch 4 auc 0.7445
+- Testing a new model: two attention layers stacked using question id as key
+epoch 0 auc 0.7256, epoch 2 auc 0.7399, epoch 4 auc 0.7424
 '''
 
 TQDM_INT = 8 
-HOME =  "/home/scao/Documents/kaggle-riiid-test/"
-MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
-DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
+
 STAGE = "stage1"
 FOLD = 1
 DATE_STR = get_date()
@@ -66,7 +75,7 @@ ROLLOUT = False
 EPOCHS = 60 if ROLLOUT else 13
 LEARNING_RATE = 1e-3
 NROWS_TRAIN = 5_000_000
-PREPROCESS = 0
+PREPROCESS = 2
 
 class conf:
     METRIC_ = "max"
@@ -142,7 +151,6 @@ else:
 n_skill = conf.NUM_SKILLS #len(skills) # len(skills) might not have all
 print("Number of skills", n_skill)
 
-
 print(f"Valid by user:  {len(valid_group)}")
 print(f"Train by user:  {len(train_group)}\n\n")
 
@@ -170,10 +178,11 @@ print("prior question explained", len(item[4]), item[4])
 # %%
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# model = SAKTModelNew(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS)
-model = SAKTMulti(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS)
+model = SAKTModelNew(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS)
+# model = SAKTMulti(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS)
 # optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.99, weight_decay=0.005)
-optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+# optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 # scheduler = ReduceLROnPlateau(optimizer, 'min', patience=conf.PATIENCE-1, threshold=1e-4,verbose=1)
 scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, eta_min=LEARNING_RATE*1e-2,verbose=1)
 # scheduler = CyclicLR(optimizer, base_lr=1e-1*LEARNING_RATE, max_lr=LEARNING_RATE, step_size_up=5,mode="triangular2", verbose=1)
@@ -191,7 +200,7 @@ print(f"# params : {num_params}")
 # %%
 if TRAIN:
     model, history = run_train_new(model, train_loader, val_loader, 
-                               optimizer, scheduler, criterion, 
+                               optimizer, criterion, scheduler=scheduler,
                                epochs=EPOCHS, device="cuda", conf=conf)
     with open(DATA_DIR+f'history_{DATE_STR}.pickle', 'wb') as handle:
         pickle.dump(history, handle, protocol=pickle.HIGHEST_PROTOCOL)

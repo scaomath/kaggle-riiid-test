@@ -31,6 +31,9 @@ DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
 DATA_TABLE = False
 
 class Riiid(Dataset):
+    '''
+    d[idx]["padded"]: future mask for the sequence
+    '''
     def __init__(self, d):
         super(Riiid, self).__init__()
         self.d = d
@@ -44,6 +47,44 @@ class Riiid(Dataset):
         return idx, self.d[idx]["content_id"], self.d[idx]["task_container_id"], \
     self.d[idx]["part_id"], self.d[idx]["prior_question_elapsed_time"], self.d[idx]["padded"], \
     self.d[idx]["answered_correctly"]
+
+    def get_user_for_inference(self, user_row):
+        """Picks a new user row and concats it to previous interactions 
+        if it was already stored.
+
+        Maybe the biggest trick in the notebook is here. We reuse the user_id column to 
+        insert the answered_correctly SOS token because we previously placed the column 
+        there on purpose.
+
+        After it, we roll that column and then crop it if it was bigger than the window
+        size, making the SOS token disapear if out of the sequence.
+
+        If the sequence if shorter than the window size, then we pad it.
+        """
+        uid = user_row[self.answered_correctly_index]
+        user_row[self.answered_correctly_index] = 2 # SOS token
+        user_row = user_row[np.newaxis, ...]
+        if uid in self.users:
+            x = np.concatenate([self.users[uid], user_row])
+            # same as in training, we need to add one!!!
+            x[:, self.answered_correctly_index] = np.roll(x[:, self.answered_correctly_index], 1) + 1
+        else:
+            x = user_row
+
+        if x.shape[0] < self.windows_size:
+            return np.pad(x, [[self.windows_size-x.shape[0], 0], [0, 0]])
+        elif x.shape[0] > self.windows_size:
+            return x[-self.windows_size:]
+        else:
+            return x
+
+    def update_user(self, uid, user):
+        """Concat the new user's interactions to the old ones if already stored."""
+        if uid in self.users:
+            self.users[uid] = \
+            np.concatenate([self.users[uid], user])[-self.windows_size:]
+        else:
+            self.users[uid] = user
 
 
 class RiiidTest(Dataset):
@@ -92,9 +133,9 @@ def collate_fn_test(batch):
     return content_id, task_id, part_id, prior_question_elapsed_time, padded
 
 
-def preprocess(data_df, question_df, train=True):
-    if train:
-        data_df['prior_question_had_explanation'] = \
+def preprocess(data_df, question_df):
+    data_df = data_df.copy(deep=True)
+    data_df['prior_question_had_explanation'] = \
             data_df['prior_question_had_explanation'].astype(np.float16).fillna(-1).astype(np.int8)
     data_df = data_df[data_df['content_type_id'] == 0]
 
