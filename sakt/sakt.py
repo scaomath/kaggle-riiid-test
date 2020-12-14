@@ -730,15 +730,17 @@ def valid_epoch_new(model, valid_iterator, criterion, device="cuda", conf=None):
 
 
 
-def run_train(model, train_iterator, valid_iterator, optim, scheduler, criterion, 
+def run_train(model, train_iterator, valid_iterator, optim, criterion, scheduler=None,
               epochs=60, device="cuda", conf=None):
+    
+    scheduler_name = str(scheduler.__class__) if scheduler is not None else ''
     history = []
     auc_max = 0
-    val_loss = 0
+    val_auc = 0
 
-    for epoch in range(1, epochs+1):
+    for epoch in range(epochs):
 
-        tqdm.write(f"\n[Epoch {epoch}/{epochs}]\n")
+        tqdm.write(f"\n\n")
         model.train()
 
         train_loss = []
@@ -762,12 +764,6 @@ def run_train(model, train_iterator, valid_iterator, optim, scheduler, criterion
                 loss = criterion(output, label)
                 loss.backward()
                 optim.step()
-                if val_loss and scheduler is not None:
-                    scheduler_name = str(scheduler.__class__)
-                    if 'CosineAnnealingWarmRestarts' in scheduler_name:
-                        scheduler.step(epoch + idx / len_dataset)
-                    elif 'ReduceLROnPlateau' in scheduler_name:
-                        scheduler.step(val_loss)
                 train_loss.append(loss.item())
 
                 output = output[:, -1]
@@ -782,8 +778,14 @@ def run_train(model, train_iterator, valid_iterator, optim, scheduler, criterion
                 outs.extend(output.view(-1).data.cpu().numpy())
 
                 if idx % TQDM_INT == 0:
-                    pbar.set_description(f'train loss - {train_loss[-1]:.4f} val loss - {val_loss:.4f}')
+                    pbar.set_description(f'[Epoch {epoch}/{epochs}]:  train loss - {train_loss[-1]:.4f}')
                     pbar.update(TQDM_INT)
+        # end of one epoch
+        if val_auc and scheduler is not None:
+            if 'ReduceLROnPlateau' in scheduler_name:
+                scheduler.step(val_auc)
+            else:
+                scheduler.step()
         
         train_acc = num_corrects / num_total
         train_auc = roc_auc_score(labels, outs)
@@ -818,15 +820,17 @@ def run_train(model, train_iterator, valid_iterator, optim, scheduler, criterion
     return model, history
 
 
-def run_train_new(model, train_iterator, valid_iterator, optim, scheduler, criterion, 
-              epochs=60, device="cuda", conf=None):
+def run_train_new(model, train_iterator, valid_iterator, optim, criterion, 
+              scheduler=None, epochs=60, device="cuda", conf=None):
     history = []
+    scheduler_name = str(scheduler.__class__) if scheduler is not None else ''
     auc_max = 0
     val_loss = 0 
+    val_auc = 0
 
-    for epoch in range(1, epochs+1):
+    for epoch in range(epochs):
 
-        tqdm.write(f"\n[Epoch {epoch}/{epochs}]\n")
+        tqdm.write("\n\n")
         model.train()
 
         train_loss = []
@@ -835,6 +839,7 @@ def run_train_new(model, train_iterator, valid_iterator, optim, scheduler, crite
         labels = []
         outs = []
         over_fit = 0
+
         len_dataset = len(train_iterator)
 
         with tqdm(total=len_dataset) as pbar:
@@ -851,9 +856,6 @@ def run_train_new(model, train_iterator, valid_iterator, optim, scheduler, crite
                 loss = criterion(output, label)
                 loss.backward()
                 optim.step()
-                if val_loss and scheduler is not None:
-                    # scheduler.step(val_loss) # reduce on plateau
-                    scheduler.step(epoch + idx / len_dataset) # cosine annealing
                 train_loss.append(loss.item())
 
                 output = output[:, -1]
@@ -868,8 +870,15 @@ def run_train_new(model, train_iterator, valid_iterator, optim, scheduler, crite
                 outs.extend(output.view(-1).data.cpu().numpy())
 
                 if idx % TQDM_INT == 0:
-                    pbar.set_description(f'train loss - {train_loss[-1]:.4f} val loss - {val_loss:.4f}')
+                    pbar.set_description(f'[Epoch {epoch}/{epochs}]:  train loss - {train_loss[-1]:.6f}')
                     pbar.update(TQDM_INT)
+        
+        # end of one epoch
+        if val_auc and scheduler is not None:
+            if 'ReduceLROnPlateau' in scheduler_name:
+                scheduler.step(val_auc)
+            else:
+                scheduler.step()
         
         train_acc = num_corrects / num_total
         train_auc = roc_auc_score(labels, outs)
@@ -936,11 +945,13 @@ def load_sakt_model(model_file, device='cuda'):
 
     return model, conf_dict
 
-def find_sakt_model(model_dir=MODEL_DIR, model_file=None):
+def find_sakt_model(model_dir=MODEL_DIR, model_file=None, model_type=None):
     # find the best AUC model, or a given model
+    if model_type is None: model_type = 'sakt'
+
     if model_file is None:
         try:
-            model_files = find_files('sakt', model_dir)
+            model_files = find_files(model_type, model_dir)
             auc_scores = [s.rsplit('.')[-2] for s in model_files]
             model_file = model_files[argmax(auc_scores)]
         except:

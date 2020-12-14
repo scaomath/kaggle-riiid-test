@@ -1,6 +1,5 @@
 #%%
 import gc
-import os
 import sys
 sys.path.append("..") 
 import pickle
@@ -16,7 +15,7 @@ from sklearn.model_selection import train_test_split
 from torch.autograd import Variable
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import (CosineAnnealingWarmRestarts,
-                                      ReduceLROnPlateau)
+                                      ReduceLROnPlateau, CyclicLR)
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
@@ -74,7 +73,7 @@ class conf:
     NUM_TIME = 300 # when scaled by 1000 and round, priori question time's unique values
     MAX_SEQ = 150
     SCALING = 1 # scaling before sigmoid
-    PATIENCE = 8 # overfit patience
+    PATIENCE = 6 # overfit patience
 
     if torch.cuda.is_available():
         map_location = lambda storage, loc: storage.cuda()
@@ -151,8 +150,12 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = SAKTModel(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS)
 # optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.99, weight_decay=0.005)
 optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-# scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, threshold=1e-4, verbose=1)
-scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, eta_min=LEARNING_RATE*1e-2, verbose=1)
+scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.2,
+                              patience=conf.PATIENCE,
+                              cooldown=conf.PATIENCE//2, 
+                              threshold=1e-5, verbose=1)
+# scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=5, eta_min=LEARNING_RATE*1e-2, verbose=1)
+# scheduler = CyclicLR(optimizer, base_lr=1e-1*LEARNING_RATE, max_lr=LEARNING_RATE, step_size_up=5,mode="triangular2", verbose=1)
 # optimizer = HNAGOptimizer(model.parameters(), lr=1e-3) 
 criterion = nn.BCEWithLogitsLoss()
 
@@ -172,8 +175,8 @@ if TRAIN:
     over_fit = 0
 
     print("\n\nTraining...:\n\n")
-    model, history = run_train(model, train_loader, val_loader, optimizer, scheduler, criterion, 
-              epochs=EPOCHS, device="cuda", conf=conf)
+    model, history = run_train(model, train_loader, val_loader, optimizer, criterion, 
+              scheduler=scheduler,epochs=EPOCHS, device="cuda", conf=conf)
     with open(DATA_DIR+f'history_{model.__name__}_{DATE_STR}.pickle', 'wb') as handle:
         pickle.dump(history, handle, protocol=pickle.HIGHEST_PROTOCOL)
 else:

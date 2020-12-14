@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import dask.dataframe as dd
 import datatable as dt
-from time import time
+from time import time, sleep
 from tqdm import tqdm
 from typing import List
 from collections import deque, Counter
@@ -27,7 +27,7 @@ MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
 DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
 
 sys.path.append(HOME)
-from ..utils import *
+from utils import *
 from transformer import *
 # %%
 '''
@@ -94,16 +94,6 @@ df_questions = pd.read_csv(DATA_DIR+'questions.csv')
 start = time()
 if PREPROCESS:
     print(f"\nProcessing train and valid...")
-    # if DEBUG: 
-    #     train_df = pd.read_csv(DATA_DIR+'train.csv', 
-    #                         nrows=NROWS_TRAIN, 
-    #                         dtype=TRAIN_DTYPES, 
-    #                         usecols=TRAIN_DTYPES.keys())
-    # else:
-    #     train_df = pd.read_csv(DATA_DIR+'train.csv', 
-    #                         dtype=TRAIN_DTYPES, 
-    #                         usecols=TRAIN_DTYPES.keys())
-    # train_df, valid_df = get_valid(train_df, n_tail=TAIL_N)
     train_df = pd.read_pickle(DATA_DIR+'cv1_train.pickle')
     valid_df = pd.read_pickle(DATA_DIR+'cv1_valid.pickle')
     print(f"train rows: {len(train_df)}    valid rows: {len(valid_df)} ")
@@ -142,13 +132,13 @@ sample = next(iter(DataLoader(dataset=dataset_train,
                 batch_size=1, collate_fn=collate_fn))) # dummy check
 # createing the mdoel
 # LAST_N is the embedded dimension number of heads must divide it
-model = TransformerModel(ninp=LAST_N, nhead=NUM_HEAD, nhid=128, nlayers=4, dropout=0.3)
+model = TransformerModel(ninp=LAST_N, nhead=NUM_HEAD, nhid=128, nlayers=3, dropout=0.3)
 model = model.to(device)
 
 losses = []
 history = []
-auc_max = -np.inf
-
+auc_max = 0
+valid_auc = 0
 # criterion = nn.BCEWithLogitsLoss()
 criterion = nn.CrossEntropyLoss()
 lr = 1e-3 
@@ -162,7 +152,7 @@ train_loader = DataLoader(dataset=dataset_train,
 val_loader = DataLoader(dataset=dataset_val, 
                         batch_size=VAL_BATCH_SIZE, 
                         collate_fn=collate_fn, 
-                        drop_last=True)
+                        drop_last=False)
 
 # snapshot_path = "%s/fold%d/snapshots" % (MODEL_DIR, FOLD)
 # if not os.path.exists(snapshot_path):
@@ -192,9 +182,7 @@ if TRAIN:
             auc_max = valid_auc
             torch.save(model.state_dict(), 
             os.path.join(MODEL_DIR, f"model_head_{NUM_HEAD}_fold{FOLD}_auc_{valid_auc:.4f}.pt"))
-        
-        with open(DATA_DIR+f'history_auc_{valid_auc:.4f}.pickle', 'wb') as handle:
-            pickle.dump(history, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    
 
         if epoch % 10 == 0:
             BATCH_SIZE *= 2
@@ -202,6 +190,9 @@ if TRAIN:
                                       shuffle=True, 
                                       batch_size=BATCH_SIZE, 
                                       collate_fn=collate_fn)
+
+    with open(DATA_DIR+f'history_auc_{valid_auc:.4f}.pickle', 'wb') as handle:
+            pickle.dump(history, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 else:
     tqdm.write("\nLoading state_dict...\n")

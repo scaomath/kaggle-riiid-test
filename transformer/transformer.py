@@ -29,7 +29,6 @@ MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
 N_EXERCISES = 13523 #  train_df['content_id'].unique()
 DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
 DATA_TABLE = False
-LAST_N = 100
 
 class Riiid(Dataset):
     def __init__(self, d):
@@ -97,9 +96,9 @@ def preprocess(data_df, question_df, train=True):
     if train:
         data_df['prior_question_had_explanation'] = \
             data_df['prior_question_had_explanation'].astype(np.float16).fillna(-1).astype(np.int8)
-    data_df = data_df[data_df.content_type_id == 0]
+    data_df = data_df[data_df['content_type_id'] == 0]
 
-    part_ids_map = dict(zip(question_df.question_id, question_df.part))
+    part_ids_map = dict(zip(question_df['question_id'], question_df['part']))
     data_df['part_id'] = data_df['content_id'].map(part_ids_map)
 
     data_df["prior_question_elapsed_time"].fillna(FILLNA_VAL, inplace=True) 
@@ -127,7 +126,7 @@ def get_feats(data_df):
             # here we make a split whether a user has more than equal to 100 entries or less than that
             # if it's less than LAST_N, then we need to PAD it using the PAD token defined as 0 by me in this cell block
             # also, padded will be True where we have done padding obviously, rest places it's False.
-            if len(row["content_id"]) >= 100:
+            if len(row["content_id"]) >= LAST_N:
                 df[idx] = {
                     "user_id": row["user_id"],
                     "content_id" : deque(row["content_id"], maxlen=LAST_N),
@@ -214,7 +213,7 @@ def get_feats_train(data_df):
         # here we make a split whether a user has more than equal to 100 entries or less than that
         # if it's less than LAST_N, then we need to PAD it using the PAD token defined as 0 by me in this cell block
         # also, padded will be True where we have done padding obviously, rest places it's False.
-        if len(row["content_id"]) >= 100:
+        if len(row["content_id"]) >= LAST_N:
             df[idx] = {
                 "user_id": row["user_id"],
                 "content_id" : deque(row["content_id"], maxlen=LAST_N),

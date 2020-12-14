@@ -1,7 +1,5 @@
 #%%
 import gc
-import os
-os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 import sys
 sys.path.append("..") 
 import pickle
@@ -176,9 +174,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = SAKTMulti(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS)
 # optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.99, weight_decay=0.005)
 optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-# scheduler = ReduceLROnPlateau(optimizer, 'min', patience=5, threshold=0.0001,verbose=1)
+# scheduler = ReduceLROnPlateau(optimizer, 'min', patience=conf.PATIENCE-1, threshold=1e-4,verbose=1)
 scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, eta_min=LEARNING_RATE*1e-2,verbose=1)
-# scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=1e-4, max_lr=1e-3,verbose=1)
+# scheduler = CyclicLR(optimizer, base_lr=1e-1*LEARNING_RATE, max_lr=LEARNING_RATE, step_size_up=5,mode="triangular2", verbose=1)
 # optimizer = HNAGOptimizer(model.parameters(), lr=1e-3) 
 criterion = nn.BCEWithLogitsLoss()
 
@@ -199,7 +197,7 @@ if TRAIN:
         pickle.dump(history, handle, protocol=pickle.HIGHEST_PROTOCOL)
 else:
     tqdm.write("\nLoading state_dict...\n")
-    model_file = find_sakt_model()
+    model_file = find_sakt_model(model_type='saktnew')
     model.load_state_dict(torch.load(model_file, map_location=device))
     model.eval()
     valid_loss, valid_acc, valid_auc = valid_epoch(model, val_loader, criterion)
