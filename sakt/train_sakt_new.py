@@ -70,8 +70,9 @@ Version notes:
 epoch 0 auc 0.7256, epoch 2 auc 0.7399, epoch 4 auc 0.7424
 Later epoch does not perform well
 
-- Testing a warm-up scheduler with 10 warm-up epochs for a model with two attention layers
+- Testing a warm-up scheduler with 10 warm-up epochs for a model with two attention layers (no significant improvement CV 7570)
 
+- To-do: test label smoothing
 
 '''
 
@@ -97,7 +98,7 @@ class conf:
     LEARNING_RATE = 1e-3
     BATCH_SIZE = 512
     VAL_BATCH_SIZE = 4096
-    NUM_EMBED = 512
+    NUM_EMBED = 256
     NUM_HEADS = 8
     NUM_SKILLS = 13523 # len(skills)
     NUM_TIME = 300 # when scaled by 1000 and round, priori question time's unique values

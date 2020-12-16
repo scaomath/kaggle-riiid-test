@@ -476,7 +476,6 @@ class SAKTModelNew(nn.Module):
 
         x += pos_x + pq_x + pa_x
 
-
         e = self.e_embedding(question_ids)
 
         x = x.permute(1, 0, 2) # x: [bs, s_len, embed] => [s_len, bs, embed]
