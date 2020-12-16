@@ -1,13 +1,12 @@
 #%%
+import sys
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
 from sklearn.metrics import roc_auc_score
 import torch
-
-from transformer.transformer import *
 from utils import *
-get_system()
+
 
 DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
 MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
@@ -90,29 +89,18 @@ class Iter_Valid(object):
         else:
             raise StopIteration()
 
-def load_model(model_file, device='cuda'):
-    # creating the model and load the weights
-    model = TransformerModel(ninp=LAST_N, nhead=10, nhid=128, nlayers=4, dropout=0.3)
-    model = model.to(device)
-    model.load_state_dict(torch.load(model_file,map_location=device))
-
-    return model
-
-def find_best_model(model_dir = MODEL_DIR, model_file=None):
-    # find the best AUC model, or a given model
-    if model_file is None:
-        model_files = find_files('transformer', model_dir)
-        tmp = [s.rsplit('.')[-2] for s in model_files]
-        model_file = model_files[argmax(tmp)]
-        print(model_file)
-    return model_file
-
 if DEBUG:
     test_df = pd.read_pickle(DATA_DIR+'cv2_valid.pickle')
     test_df[:SIMU_PUB_SIZE].to_pickle(DATA_DIR+'test_pub_simu.pickle')
 
 #%%
 if __name__ == "__main__":
+    get_system()
+    try:
+        from transformer.transformer import *
+    except:
+        ModuleNotFoundError('transformer not found')
+
     print("Loading test set....")
     if PRIVATE:
         test_df = pd.read_pickle(DATA_DIR+'cv2_valid.pickle')

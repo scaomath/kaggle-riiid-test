@@ -1,4 +1,5 @@
 #%%
+import os
 import gc
 import sys
 
@@ -30,9 +31,12 @@ sns.set_context("paper", font_scale=1.2)
 # WORKSPACE_FOLDER=/home/scao/Documents/kaggle-riiid-test
 # PYTHONPATH=${WORKSPACE_FOLDER}:${WORKSPACE_FOLDER}/sakt:${WORKSPACE_FOLDER}/transformer
 
-HOME =  "/home/scao/Documents/kaggle-riiid-test/"
-MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
-DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
+HOME = os.path.abspath(os.path.join('.', os.pardir))
+print(HOME, '\n\n')
+HOME = "/home/scao/Documents/kaggle-riiid-test/"
+
+MODEL_DIR = os.path.join(HOME,  'model')
+DATA_DIR = os.path.join(HOME,  'data')
 sys.path.append(HOME) 
 from utils import *
 get_system()
@@ -55,13 +59,20 @@ an implementation of this paper: https://arxiv.org/pdf/1907.06837.pdf
 Version notes:
 
 - Increasing seq_len for sakt new model does not work well
+
 - Testing performance of the following configs for both attention layers and after concat att outputs:
 1. bn(relu(f(x))) + x, epoch 1 auc 0.7372, epoch 3 auc 0.7422, epoch 5 auc 0.7445 
 2. bn(relu(f(x)) + x), epoch 1 auc 0.7379, epoch 3 auc 0.7413, epoch 5 auc 0.7443
 3. bn(f(x)) + x: epoch 0 auc 0.7369, epoch 2 auc 0.7415, epoch 4 auc 0.7448
 4. bn(f(x) + x): epoch 0 auc 0.7380, epoch 2 auc 0.7418, epoch 4 auc 0.7445
+
 - Testing a new model: two attention layers stacked using question id as key
 epoch 0 auc 0.7256, epoch 2 auc 0.7399, epoch 4 auc 0.7424
+Later epoch does not perform well
+
+- Testing a warm-up scheduler with 10 warm-up epochs for a model with two attention layers
+
+
 '''
 
 TQDM_INT = 8 
@@ -71,11 +82,12 @@ FOLD = 1
 DATE_STR = get_date()
 TRAIN = True
 DEBUG = False
-ROLLOUT = False
+ROLLOUT = True
 EPOCHS = 60 if ROLLOUT else 13
 LEARNING_RATE = 1e-3
 NROWS_TRAIN = 5_000_000
 PREPROCESS = 2
+
 
 class conf:
     METRIC_ = "max"
@@ -85,13 +97,14 @@ class conf:
     LEARNING_RATE = 1e-3
     BATCH_SIZE = 512
     VAL_BATCH_SIZE = 4096
-    NUM_EMBED = 128
+    NUM_EMBED = 512
     NUM_HEADS = 8
     NUM_SKILLS = 13523 # len(skills)
     NUM_TIME = 300 # when scaled by 1000 and round, priori question time's unique values
     MAX_SEQ = 150
     SCALING = 1 # scaling before sigmoid
     PATIENCE = 8 # overfit patience
+    SAVING_THRESHOLD = 0.754 # the threshold for auc to save a model
 
     if torch.cuda.is_available():
         map_location = lambda storage, loc: storage.cuda()
@@ -177,14 +190,14 @@ print("prior question explained", len(item[4]), item[4])
 
 # %%
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 model = SAKTModelNew(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS)
 # model = SAKTMulti(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS)
 # optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.99, weight_decay=0.005)
 # optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 # scheduler = ReduceLROnPlateau(optimizer, 'min', patience=conf.PATIENCE-1, threshold=1e-4,verbose=1)
-scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, eta_min=LEARNING_RATE*1e-2,verbose=1)
+# scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, eta_min=LEARNING_RATE*1e-2,verbose=1)
+scheduler = WarmupCosineSchedule(optimizer, warmup_steps=10, t_total=EPOCHS)
 # scheduler = CyclicLR(optimizer, base_lr=1e-1*LEARNING_RATE, max_lr=LEARNING_RATE, step_size_up=5,mode="triangular2", verbose=1)
 # optimizer = HNAGOptimizer(model.parameters(), lr=1e-3) 
 criterion = nn.BCEWithLogitsLoss()
@@ -192,7 +205,7 @@ criterion = nn.BCEWithLogitsLoss()
 model.to(device)
 criterion.to(device)
 num_params = get_num_params(model)
-print('\n\n')
+print(f'\n\nModel: {model.__name__}')
 print(f"# heads  : {conf.NUM_HEADS}")
 print(f"# embed  : {conf.NUM_EMBED}")
 print(f"seq len  : {conf.MAX_SEQ}")

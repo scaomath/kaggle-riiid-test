@@ -1,6 +1,5 @@
 data/
-data/lectures.csv
-riiid.code-workspace
+# riiid.code-workspace
 __pycache__/
 *.pt
 *.png

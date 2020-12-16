@@ -46,7 +46,7 @@ def cpu_stats():
     pid = os.getpid()
     py = psutil.Process(pid)
     memory_use = py.memory_info()[0] / 2. ** 30
-    return 'memory GB:' + str(np.round(memory_use, 2))
+    print(f'Memory     : {str(np.round(memory_use, 2))} GB' )
 
 def get_date():
     today = date.today()
@@ -98,9 +98,11 @@ def reduce_mem_usage(df, verbose=True):
                 else:
                     df[col] = df[col].astype(np.float64)    
     end_mem = df.memory_usage().sum() / 1024**2
-    if verbose: print('Mem. usage decreased to {:5.2f} Mb ({:.1f}% reduction)'.format(end_mem, 100 * (start_mem - end_mem) / start_mem))
+    if verbose: print(f'Mem. usage decreased to {end_mem:5.2f} Mb ({100 * (start_mem - end_mem) / start_mem:.1f}% reduction)')
     return df
 
 
 if __name__ == "__main__":
+    get_system()
     cpu_stats()
+    

@@ -1,3 +1,4 @@
+import sys
 from collections import Counter, deque
 from time import time
 from typing import List
@@ -14,6 +15,12 @@ from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
+HOME =  "/home/scao/Documents/kaggle-riiid-test/"
+MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
+DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
+sys.path.append(HOME)
+from utils import *
+
 '''
 Download Kaggle data using kaggle API:
 kaggle competitions download riiid-test-answer-prediction --path ./data
@@ -21,13 +28,11 @@ This file contains the datatset class and feature engineering functions
 '''
 
 FILLNA_VAL = 100
-LAST_N = 100
+LAST_N = 150
 TQDM_INT = 8
 PAD = 0
 FOLD = 1
-MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
 N_EXERCISES = 13523 #  train_df['content_id'].unique()
-DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
 DATA_TABLE = False
 
 class Riiid(Dataset):
@@ -48,43 +53,43 @@ class Riiid(Dataset):
     self.d[idx]["part_id"], self.d[idx]["prior_question_elapsed_time"], self.d[idx]["padded"], \
     self.d[idx]["answered_correctly"]
 
-    def get_user_for_inference(self, user_row):
-        """Picks a new user row and concats it to previous interactions 
-        if it was already stored.
+    # def get_user_for_inference(self, user_row):
+    #     """Picks a new user row and concats it to previous interactions 
+    #     if it was already stored.
 
-        Maybe the biggest trick in the notebook is here. We reuse the user_id column to 
-        insert the answered_correctly SOS token because we previously placed the column 
-        there on purpose.
+    #     Maybe the biggest trick in the notebook is here. We reuse the user_id column to 
+    #     insert the answered_correctly SOS token because we previously placed the column 
+    #     there on purpose.
 
-        After it, we roll that column and then crop it if it was bigger than the window
-        size, making the SOS token disapear if out of the sequence.
+    #     After it, we roll that column and then crop it if it was bigger than the window
+    #     size, making the SOS token disapear if out of the sequence.
 
-        If the sequence if shorter than the window size, then we pad it.
-        """
-        uid = user_row[self.answered_correctly_index]
-        user_row[self.answered_correctly_index] = 2 # SOS token
-        user_row = user_row[np.newaxis, ...]
-        if uid in self.users:
-            x = np.concatenate([self.users[uid], user_row])
-            # same as in training, we need to add one!!!
-            x[:, self.answered_correctly_index] = np.roll(x[:, self.answered_correctly_index], 1) + 1
-        else:
-            x = user_row
+    #     If the sequence if shorter than the window size, then we pad it.
+    #     """
+    #     uid = user_row[self.answered_correctly_index]
+    #     user_row[self.answered_correctly_index] = 2 # SOS token
+    #     user_row = user_row[np.newaxis, ...]
+    #     if uid in self.users:
+    #         x = np.concatenate([self.users[uid], user_row])
+    #         # same as in training, we need to add one!!!
+    #         x[:, self.answered_correctly_index] = np.roll(x[:, self.answered_correctly_index], 1) + 1
+    #     else:
+    #         x = user_row
 
-        if x.shape[0] < self.windows_size:
-            return np.pad(x, [[self.windows_size-x.shape[0], 0], [0, 0]])
-        elif x.shape[0] > self.windows_size:
-            return x[-self.windows_size:]
-        else:
-            return x
+    #     if x.shape[0] < self.windows_size:
+    #         return np.pad(x, [[self.windows_size-x.shape[0], 0], [0, 0]])
+    #     elif x.shape[0] > self.windows_size:
+    #         return x[-self.windows_size:]
+    #     else:
+    #         return x
 
-    def update_user(self, uid, user):
-        """Concat the new user's interactions to the old ones if already stored."""
-        if uid in self.users:
-            self.users[uid] = \
-            np.concatenate([self.users[uid], user])[-self.windows_size:]
-        else:
-            self.users[uid] = user
+    # def update_user(self, uid, user):
+    #     """Concat the new user's interactions to the old ones if already stored."""
+    #     if uid in self.users:
+    #         self.users[uid] = \
+    #         np.concatenate([self.users[uid], user])[-self.windows_size:]
+    #     else:
+    #         self.users[uid] = user
 
 
 class RiiidTest(Dataset):
@@ -148,14 +153,14 @@ def preprocess(data_df, question_df):
     return data_df
 
 
-def get_feats(data_df):
+def get_feats(data_df, max_seq=LAST_N):
     '''
     Using a deque as it automatically limits the max_size as per the Data Strucutre's defination itself
     so we don't need to manage that...
     '''
     df = {}
     user_id_to_idx = {}
-    grp = data_df.groupby("user_id", sort=False).tail(LAST_N) # Select last_n rows of each user.
+    grp = data_df.groupby("user_id", sort=False).tail(max_seq) # Select last_n rows of each user.
     grp_user = grp.groupby("user_id", sort=False)
     num_user_id_grp = len(grp_user)
 
@@ -165,29 +170,29 @@ def get_feats(data_df):
             "part_id":list, "prior_question_elapsed_time":list
             }).reset_index().iterrows():
             # here we make a split whether a user has more than equal to 100 entries or less than that
-            # if it's less than LAST_N, then we need to PAD it using the PAD token defined as 0 by me in this cell block
+            # if it's less than max_seq, then we need to PAD it using the PAD token defined as 0 by me in this cell block
             # also, padded will be True where we have done padding obviously, rest places it's False.
-            if len(row["content_id"]) >= LAST_N:
+            if len(row["content_id"]) >= max_seq:
                 df[idx] = {
                     "user_id": row["user_id"],
-                    "content_id" : deque(row["content_id"], maxlen=LAST_N),
-                    "answered_correctly" : deque(row["answered_correctly"], maxlen=LAST_N),
-                    "task_container_id" : deque(row["task_container_id"], maxlen=LAST_N),
-                    "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"], maxlen=LAST_N),
-                    "part_id": deque(row["part_id"], maxlen=LAST_N),
-                    "padded" : deque([False]*100, maxlen=LAST_N)
+                    "content_id" : deque(row["content_id"], maxlen=max_seq),
+                    "answered_correctly" : deque(row["answered_correctly"], maxlen=max_seq),
+                    "task_container_id" : deque(row["task_container_id"], maxlen=max_seq),
+                    "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"], maxlen=max_seq),
+                    "part_id": deque(row["part_id"], maxlen=max_seq),
+                    "padded" : deque([False]*max_seq, maxlen=max_seq)
                 }
             else:
                 # we have to pad...
-                # (max_batch_len - len(seq))
+                num_padding = max_seq-len(row["content_id"])
                 df[idx] = {
                     "user_id": row["user_id"],
-                    "content_id" : deque(row["content_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                    "answered_correctly" : deque(row["answered_correctly"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                    "task_container_id" : deque(row["task_container_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                    "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                    "part_id": deque(row["part_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                    "padded" : deque([False]*len(row["content_id"]) + [True]*(100-len(row["content_id"])), maxlen=LAST_N)
+                    "content_id" : deque(row["content_id"] + [PAD]*num_padding, maxlen=max_seq),
+                    "answered_correctly" : deque(row["answered_correctly"] + [PAD]*num_padding, maxlen=max_seq),
+                    "task_container_id" : deque(row["task_container_id"] + [PAD]*num_padding, maxlen=max_seq),
+                    "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"] + [PAD]*num_padding, maxlen=max_seq),
+                    "part_id": deque(row["part_id"] + [PAD]*num_padding, maxlen=max_seq),
+                    "padded" : deque([False]*len(row["content_id"]) + [True]*num_padding, maxlen=max_seq)
                 }
             user_id_to_idx[row["user_id"]] = idx
             if idx % TQDM_INT == 0:
@@ -195,14 +200,14 @@ def get_feats(data_df):
         # if in future a new user comes, we will just increase the counts as of now... <WIP>
     return df, user_id_to_idx
 
-def get_feats_test(data_df):
+def get_feats_test(data_df, max_seq=LAST_N):
     '''
     Using a deque as it automatically limits the max_size as per the Data Strucutre's defination itself
     so we don't need to manage that...
     '''
     df = {}
     user_id_to_idx = {}
-    grp = data_df.groupby("user_id", sort=False).tail(LAST_N) # Select last_n rows of each user.
+    grp = data_df.groupby("user_id", sort=False).tail(max_seq) # Select last_n rows of each user.
     grp_user = grp.groupby("user_id", sort=False)
     
     for idx, row in grp_user.agg({
@@ -212,39 +217,40 @@ def get_feats_test(data_df):
         # here we make a split whether a user has more than equal to 100 entries or less than that
         # if it's less than LAST_N, then we need to PAD it using the PAD token defined as 0 by me in this cell block
         # also, padded will be True where we have done padding obviously, rest places it's False.
-        if len(row["content_id"]) >= 100:
+        if len(row["content_id"]) >= max_seq:
             df[idx] = {
                 "user_id": row["user_id"],
-                "content_id" : deque(row["content_id"], maxlen=LAST_N),
-                "task_container_id" : deque(row["task_container_id"], maxlen=LAST_N),
-                "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"], maxlen=LAST_N),
-                "part_id": deque(row["part_id"], maxlen=LAST_N),
-                "padded" : deque([False]*100, maxlen=LAST_N)
+                "content_id" : deque(row["content_id"], maxlen=max_seq),
+                "task_container_id" : deque(row["task_container_id"], maxlen=max_seq),
+                "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"], maxlen=max_seq),
+                "part_id": deque(row["part_id"], maxlen=max_seq),
+                "padded" : deque([False]*max_seq, maxlen=max_seq)
             }
         else:
             # we have to pad...
-            # (max_batch_len - len(seq))
+            num_padding = max_seq-len(row["content_id"])
             df[idx] = {
                 "user_id": row["user_id"],
-                "content_id" : deque(row["content_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                "task_container_id" : deque(row["task_container_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                "part_id": deque(row["part_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                "padded" : deque([False]*len(row["content_id"]) + [True]*(100-len(row["content_id"])), maxlen=LAST_N)
+                "content_id" : deque(row["content_id"] + [PAD]*num_padding, maxlen=max_seq),
+                "task_container_id" : deque(row["task_container_id"] + [PAD]*num_padding, maxlen=max_seq),
+                "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"] + [PAD]*num_padding, maxlen=max_seq),
+                "part_id": deque(row["part_id"] + [PAD]*num_padding, maxlen=max_seq),
+                "padded" : deque([False]*len(row["content_id"]) + [True]*num_padding, maxlen=max_seq)
             }
         user_id_to_idx[row["user_id"]] = idx
 
     return df, user_id_to_idx
 
 
-def get_feats_train(data_df):
+def get_feats_train(data_df, max_seq=LAST_N):
     '''
     Using a deque as it automatically limits the max_size as per the Data Strucutre's defination itself
     so we don't need to manage that...
     '''
     df = {}
     user_id_to_idx = {}
-    grp = data_df.groupby("user_id", sort=False).tail(LAST_N) # Select last_n rows of each user.
+    # grp = data_df.groupby("user_id", sort=False).tail(max_seq) # Select last_n rows of each user.
+    grp = data_df.groupby("user_id", sort=False).tail(max_seq)
     grp_user = grp.groupby("user_id", sort=False)
 
     for idx, row in grp_user.agg({
@@ -254,27 +260,27 @@ def get_feats_train(data_df):
         # here we make a split whether a user has more than equal to 100 entries or less than that
         # if it's less than LAST_N, then we need to PAD it using the PAD token defined as 0 by me in this cell block
         # also, padded will be True where we have done padding obviously, rest places it's False.
-        if len(row["content_id"]) >= LAST_N:
+        if len(row["content_id"]) >= max_seq:
             df[idx] = {
                 "user_id": row["user_id"],
-                "content_id" : deque(row["content_id"], maxlen=LAST_N),
-                "answered_correctly" : deque(row["answered_correctly"], maxlen=LAST_N),
-                "task_container_id" : deque(row["task_container_id"], maxlen=LAST_N),
-                "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"], maxlen=LAST_N),
-                "part_id": deque(row["part_id"], maxlen=LAST_N),
-                "padded" : deque([False]*100, maxlen=LAST_N)
+                "content_id" : deque(row["content_id"], maxlen=max_seq),
+                "answered_correctly" : deque(row["answered_correctly"], maxlen=max_seq),
+                "task_container_id" : deque(row["task_container_id"], maxlen=max_seq),
+                "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"], maxlen=max_seq),
+                "part_id": deque(row["part_id"], maxlen=max_seq),
+                "padded" : deque([False]*max_seq, maxlen=max_seq)
             }
         else:
             # we have to pad...
-            # (max_batch_len - len(seq))
+            num_padding = max_seq-len(row["content_id"])
             df[idx] = {
                 "user_id": row["user_id"],
-                "content_id" : deque(row["content_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                "answered_correctly" : deque(row["answered_correctly"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                "task_container_id" : deque(row["task_container_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                "part_id": deque(row["part_id"] + [PAD]*(100-len(row["content_id"])), maxlen=LAST_N),
-                "padded" : deque([False]*len(row["content_id"]) + [True]*(100-len(row["content_id"])), maxlen=LAST_N)
+                "content_id" : deque(row["content_id"] + [PAD]*num_padding, maxlen=max_seq),
+                "answered_correctly" : deque(row["answered_correctly"] + [PAD]*num_padding, maxlen=max_seq),
+                "task_container_id" : deque(row["task_container_id"] + [PAD]*num_padding, maxlen=max_seq),
+                "prior_question_elapsed_time" : deque(row["prior_question_elapsed_time"] + [PAD]*num_padding, maxlen=max_seq),
+                "part_id": deque(row["part_id"] + [PAD]*num_padding, maxlen=max_seq),
+                "padded" : deque([False]*len(row["content_id"]) + [True]*num_padding, maxlen=max_seq)
             }
         user_id_to_idx[row["user_id"]] = idx
 
@@ -291,7 +297,11 @@ class TransformerModel(nn.Module):
         '''
         super(TransformerModel, self).__init__()
         self.src_mask = None
-        encoder_layers = TransformerEncoderLayer(d_model=ninp, nhead=nhead, dim_feedforward=nhid, dropout=dropout, activation='relu')
+        encoder_layers = TransformerEncoderLayer(d_model=ninp, 
+                                                 nhead=nhead, 
+                                                 dim_feedforward=nhid, 
+                                                 dropout=dropout, 
+                                                 activation='relu')
         self.transformer_encoder = TransformerEncoder(encoder_layer=encoder_layers, num_layers=nlayers)
         self.exercise_embeddings = nn.Embedding(num_embeddings=N_EXERCISES, embedding_dim=ninp) # exercise_id
         self.pos_embedding = nn.Embedding(ninp, ninp) # positional embeddings
@@ -436,6 +446,26 @@ def valid_epoch(model, valid_iterator, criterion):
 
     return loss, acc, auc
 
+def load_model(model_file, device='cuda', conf=None):
+    # creating the model and load the weights
+    if conf is not dict:
+        conf = dict(conf)
+    try:
+        model = TransformerModel(**conf)
+        model = model.to(device)
+        model.load_state_dict(torch.load(model_file, map_location=device))
+        return model
+    except:
+        RuntimeError("Model cannot be loaded.")
+
+def find_best_model(model_dir = MODEL_DIR, model_file=None):
+    # find the best AUC model, or a given model
+    if model_file is None:
+        model_files = find_files('transformer', model_dir)
+        tmp = [s.rsplit('.')[-2] for s in model_files]
+        model_file = model_files[argmax(tmp)]
+        print(model_file)
+    return model_file
 
 if __name__ == "__main__":
     start = time()

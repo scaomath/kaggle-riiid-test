@@ -191,7 +191,7 @@ class SAKTDatasetNew(Dataset):
             qa: question answer correct or not
             '''
             q, pqt, pqe, qa = group[user_id] 
-            if len(q) < 2: # 5 interactions minimum
+            if len(q) < 5: # 5 interactions minimum
                 continue
             self.user_ids.append(user_id) # user_ids indexes
 
@@ -483,7 +483,7 @@ class SAKTModelNew(nn.Module):
         e = e.permute(1, 0, 2)
         att_mask = future_mask(x.size(0)).to(device)
 
-        att_output, att_weight = self.multi_att(e, x, x, attn_mask=att_mask)
+        att_output, _ = self.multi_att(e, x, x, attn_mask=att_mask)
         att_output = self.layer_normal(att_output + e)
         att_output, att_weight = self.multi_att2(e, att_output, att_output, attn_mask=att_mask)
         att_output = self.layer_normal(att_output + e)
@@ -753,6 +753,7 @@ def run_train(model, train_iterator, valid_iterator, optim, criterion, scheduler
     scheduler_name = str(scheduler.__class__) if scheduler is not None else ''
     history = []
     auc_max = 0
+    best_epoch = 0
     val_auc = 0
 
     for epoch in range(epochs):
@@ -795,7 +796,9 @@ def run_train(model, train_iterator, valid_iterator, optim, criterion, scheduler
                 outs.extend(output.view(-1).data.cpu().numpy())
 
                 if idx % TQDM_INT == 0:
-                    pbar.set_description(f'[Epoch {epoch}/{epochs}]:  train loss - {train_loss[-1]:.4f}')
+                    descr = f'[Epoch {epoch}/{epochs}]:  train loss - {train_loss[-1]:.6f}   '
+                    descr += f"best val auc - {auc_max:.6f} at epoch {best_epoch}"
+                    pbar.set_description(descr)
                     pbar.update(TQDM_INT)
         # end of one epoch
         if val_auc and scheduler is not None:
@@ -808,11 +811,11 @@ def run_train(model, train_iterator, valid_iterator, optim, criterion, scheduler
         train_auc = roc_auc_score(labels, outs)
         train_loss = np.mean(train_loss)
 
-        tqdm.write(f"\nTrain: loss - {train_loss:.2f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
+        tqdm.write(f"\nTrain: loss - {train_loss:.4f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
 
         val_loss, val_acc, val_auc = valid_epoch(model, valid_iterator, criterion, 
                                                  device=device, conf=conf)
-        tqdm.write(f"\nValid: loss - {val_loss:.2f} acc - {val_acc:.4f} auc - {val_auc:.4f}")
+        tqdm.write(f"\nValid: loss - {val_loss:.4f} acc - {val_acc:.4f} auc - {val_auc:.4f}")
 
         lr = optim.param_groups[0]['lr']
         history.append({"epoch":epoch, "lr": lr, 
@@ -822,8 +825,9 @@ def run_train(model, train_iterator, valid_iterator, optim, criterion, scheduler
         if val_auc > auc_max:
             print(f"\n[Epoch {epoch}/{epochs}] auc improved from {auc_max:.6f} to {val_auc:.6f}") 
             auc_max = val_auc
+            best_epoch = epoch
             over_fit = 0
-            if val_auc > 0.75:
+            if val_auc > conf.SAVING_THRESHOLD:
                 model_name = f"{model.__name__}_head_{conf.NUM_HEADS}_embed_{conf.NUM_EMBED}_seq_{conf.MAX_SEQ}"
                 model_name += f"_auc_{val_auc:.4f}.pt"
                 torch.save(model.state_dict(), os.path.join(MODEL_DIR, model_name))
@@ -842,6 +846,7 @@ def run_train_new(model, train_iterator, valid_iterator, optim, criterion,
     history = []
     scheduler_name = str(scheduler.__class__) if scheduler is not None else ''
     auc_max = 0
+    best_epoch = 0
     val_loss = 0 
     val_auc = 0
 
@@ -887,7 +892,9 @@ def run_train_new(model, train_iterator, valid_iterator, optim, criterion,
                 outs.extend(output.view(-1).data.cpu().numpy())
 
                 if idx % TQDM_INT == 0:
-                    pbar.set_description(f'[Epoch {epoch}/{epochs}]:  train loss - {train_loss[-1]:.6f}')
+                    descr = f'[Epoch {epoch}/{epochs}]:  train loss - {train_loss[-1]:.6f}   '
+                    descr += f"best val auc - {auc_max:.6f} at epoch {best_epoch}"
+                    pbar.set_description(descr)
                     pbar.update(TQDM_INT)
         
         # end of one epoch
@@ -901,11 +908,11 @@ def run_train_new(model, train_iterator, valid_iterator, optim, criterion,
         train_auc = roc_auc_score(labels, outs)
         train_loss = np.mean(train_loss)
 
-        tqdm.write(f"\nTrain: loss - {train_loss:.2f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
+        tqdm.write(f"\nTrain: loss - {train_loss:.4f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
 
         val_loss, val_acc, val_auc = valid_epoch_new(model, valid_iterator, criterion, 
                                                      device=device, conf=conf)
-        tqdm.write(f"\nValid: loss - {val_loss:.2f} acc - {val_acc:.4f} auc - {val_auc:.4f}")
+        tqdm.write(f"\nValid: loss - {val_loss:.4f} acc - {val_acc:.4f} auc - {val_auc:.4f}")
 
         lr = optim.param_groups[0]['lr']
         history.append({"epoch":epoch, "lr": lr, 
@@ -915,8 +922,9 @@ def run_train_new(model, train_iterator, valid_iterator, optim, criterion,
         if val_auc > auc_max:
             print(f"\n[Epoch {epoch}/{epochs}] auc improved from {auc_max:.6f} to {val_auc:.6f}") 
             auc_max = val_auc
+            best_epoch = epoch
             over_fit = 0
-            if val_auc > 0.75:
+            if val_auc > conf.SAVING_THRESHOLD:
                 model_name = f"{model.__name__}_head_{conf.NUM_HEADS}_embed_{conf.NUM_EMBED}_seq_{conf.MAX_SEQ}"
                 model_name += f"_auc_{val_auc:.4f}.pt"
                 torch.save(model.state_dict(), os.path.join(MODEL_DIR, model_name))

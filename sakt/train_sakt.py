@@ -1,7 +1,7 @@
 #%%
 import gc
 import sys
-sys.path.append("..") 
+
 import pickle
 
 import datatable as dt
@@ -22,7 +22,8 @@ from tqdm import tqdm
 sns.set()
 DEFAULT_FIG_WIDTH = 20
 sns.set_context("paper", font_scale=1.2) 
-
+HOME = "/home/scao/Documents/kaggle-riiid-test/"
+sys.path.append(HOME) 
 from utils import *
 from sakt import *
 
@@ -72,7 +73,7 @@ class conf:
     NUM_SKILLS = 13523 # len(skills)
     NUM_TIME = 300 # when scaled by 1000 and round, priori question time's unique values
     MAX_SEQ = 150
-    SCALING = 1 # scaling before sigmoid
+    SCALING = 2 # scaling before sigmoid
     PATIENCE = 6 # overfit patience
 
     if torch.cuda.is_available():
