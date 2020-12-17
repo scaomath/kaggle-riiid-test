@@ -353,14 +353,14 @@ class TestDatasetNew(Dataset):
         return x, questions, prior_q_time, prior_q_explain
 
 class FFN(nn.Module):
-    def __init__(self, state_size=NUM_EMBED, num_query=1):
+    def __init__(self, state_size=NUM_EMBED, nc=1):
         super(FFN, self).__init__()
         self.state_size = state_size
 
-        self.lr1 = nn.Linear(state_size, state_size//num_query)
+        self.lr1 = nn.Linear(state_size, state_size//nc)
         self.relu = nn.ReLU()
         # self.leakyrelu = nn.LeakyReLU()
-        self.lr2 = nn.Linear(state_size//num_query, state_size//num_query)
+        self.lr2 = nn.Linear(state_size//nc, state_size//nc)
         self.dropout = nn.Dropout(0.2)
     
     def forward(self, x):
@@ -375,11 +375,16 @@ def future_mask(seq_length):
 
 
 class SAKTModel(nn.Module):
-    def __init__(self, n_skill, max_seq=MAX_SEQ, embed_dim=NUM_EMBED, num_heads=NUM_HEADS):
+    def __init__(self, n_skill, 
+                       max_seq=MAX_SEQ, 
+                       embed_dim=NUM_EMBED, 
+                       num_heads=NUM_HEADS,
+                       num_layers=NUM_LAYERS):
         super(SAKTModel, self).__init__()
         self.__name__ = 'sakt'
         self.n_skill = n_skill
         self.embed_dim = embed_dim
+        self.num_layers = num_layers
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
         self.embedding = nn.Embedding(2*n_skill+1, embed_dim)
@@ -391,7 +396,7 @@ class SAKTModel(nn.Module):
         self.dropout = nn.Dropout(0.2)
         self.layer_normal = nn.LayerNorm(embed_dim) 
 
-        self.ffn = FFN(embed_dim)
+        self.ffn = FFN(embed_dim, nc=1)
         self.pred = nn.Linear(embed_dim, 1)
     
     def forward(self, x, question_ids):
@@ -407,12 +412,16 @@ class SAKTModel(nn.Module):
         x = x.permute(1, 0, 2) # x: [bs, s_len, embed] => [s_len, bs, embed]
         e = e.permute(1, 0, 2)
         att_mask = future_mask(x.size(0)).to(device)
-        att_output, att_weight = self.multi_att(e, x, x, attn_mask=att_mask)
-        att_output = self.layer_normal(att_output + e)
-        att_output = att_output.permute(1, 0, 2) # att_output: [s_len, bs, embed] => [bs, s_len, embed]
+        att_weight = None 
 
-        x = self.ffn(att_output)
-        x = self.layer_normal(x + att_output) # original
+        for _ in range(self.num_layers):
+            x, att_weight = self.multi_att(e, x, x, attn_mask=att_mask)
+            x = self.layer_normal(x + e)
+        x = x.permute(1, 0, 2) # att_output: [s_len, bs, embed] => [bs, s_len, embed]
+
+        output = self.ffn(x)
+        # x = self.layer_normal(x + output) # original
+        x = self.layer_normal(output) # if nc>=2 get rid of the skip connection
         x = self.pred(x)
 
         return x.squeeze(-1), att_weight
@@ -423,7 +432,7 @@ class SAKTModelNew(nn.Module):
                        embed_dim=NUM_EMBED, 
                        num_heads=NUM_HEADS, 
                     #    num_hid=NUM_HIDDEN,
-                    #    num_layers=NUM_LAYERS,
+                       num_layers=NUM_LAYERS,
                        ):
         super(SAKTModelNew, self).__init__()
         self.__name__ = 'saktnew'
@@ -440,16 +449,10 @@ class SAKTModelNew(nn.Module):
         self.pa_embedding = nn.Embedding(2+1, embed_dim) 
 
         self.multi_att = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.2)
-        self.multi_att2 = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads//2, dropout=0.2)
-
-        # encoder_layers = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=num_heads, 
-        #                                 dim_feedforward=num_hid, dropout=0.2, activation='relu')
-        # self.transformer_encoder = nn.TransformerEncoder(encoder_layer=encoder_layers, num_layers=num_layers)
-
         self.dropout = nn.Dropout(0.2)
         self.layer_normal = nn.LayerNorm(embed_dim) 
-
-        self.ffn = FFN(embed_dim)
+        self.num_layers = num_layers
+        self.ffn = FFN(embed_dim, nc=1)
         # self.fc1 = nn.Linear(embed_dim, embed_dim)
         self.pred = nn.Linear(embed_dim, 1)
         # self.leakyrelu = nn.LeakyReLU()
@@ -481,16 +484,16 @@ class SAKTModelNew(nn.Module):
         x = x.permute(1, 0, 2) # x: [bs, s_len, embed] => [s_len, bs, embed]
         e = e.permute(1, 0, 2)
         att_mask = future_mask(x.size(0)).to(device)
+        att_weight = None
 
-        att_output, _ = self.multi_att(e, x, x, attn_mask=att_mask)
-        att_output = self.layer_normal(att_output + e)
-        att_output, att_weight = self.multi_att2(e, att_output, att_output, attn_mask=att_mask)
-        att_output = self.layer_normal(att_output + e)
+        for _ in range(self.num_layers):
+            x, att_weight = self.multi_att(e, x, x, attn_mask=att_mask)
+            x = self.layer_normal(x + e)
 
-        att_output = att_output.permute(1, 0, 2) # att_output: [s_len, bs, embed] => [bs, s_len, embed]
+        x = x.permute(1, 0, 2) # att_output: [s_len, bs, embed] => [bs, s_len, embed]
 
-        x = self.ffn(att_output)
-        x = self.layer_normal(x + att_output) # original
+        output = self.ffn(x)
+        x = self.layer_normal(x + output) # original
         # x = self.leakyrelu(x)
         x = self.pred(x)
 
@@ -522,7 +525,8 @@ class SAKTMulti(nn.Module):
 
         self.ffn = FFN(3*embed_dim)
         self.layer_normal1 = nn.LayerNorm(3*embed_dim) 
-        self.pred = nn.Linear(3*embed_dim, 1)
+        self.fc1 = nn.Linear(3*embed_dim, embed_dim)
+        self.fc2 = nn.Linear(embed_dim, 1)
         self.relu = nn.ReLU()
     
     def forward(self, x, question_ids, prior_question_time=None, prior_question_explain=None):
@@ -569,10 +573,12 @@ class SAKTMulti(nn.Module):
 
         att_output = torch.cat((att_output1, att_output2, att_output3), dim=2)
         x = self.ffn(att_output)
+        x = self.dropout(x)
         # x = self.relu(x)
-        x = self.layer_normal1(x) + att_output # config 1: after normalization then residual
-        # x = self.layer_normal1(x + att_output) # config 2: first residual then normalization
-        x = self.pred(x)
+        # x = self.layer_normal1(x) + att_output # config 1: after normalization then residual
+        x = self.layer_normal1(x + att_output) # config 2: first residual then normalization
+        x = self.fc1(x)
+        x = self.fc2(x)
 
         return x.squeeze(-1), [att_weight1, att_weight2, att_weight3]
 
@@ -753,7 +759,7 @@ def run_train(model, train_iterator, valid_iterator, optim, criterion, scheduler
     history = []
     auc_max = 0
     best_epoch = 0
-    val_auc = 0
+    val_auc = 0.5
 
     for epoch in range(epochs):
 
@@ -817,6 +823,9 @@ def run_train(model, train_iterator, valid_iterator, optim, criterion, scheduler
         tqdm.write(f"\nValid: loss - {val_loss:.4f} acc - {val_acc:.4f} auc - {val_auc:.4f}")
 
         lr = optim.param_groups[0]['lr']
+
+        tqdm.write(f'\nCurrent learning rate: {lr:4e}')
+
         history.append({"epoch":epoch, "lr": lr, 
                         **{"train_auc": train_auc, "train_acc": train_acc}, 
                         **{"valid_auc": val_auc, "valid_acc": val_acc}})
@@ -847,7 +856,7 @@ def run_train_new(model, train_iterator, valid_iterator, optim, criterion,
     auc_max = 0
     best_epoch = 0
     val_loss = 0 
-    val_auc = 0
+    val_auc = 0.5
 
     for epoch in range(epochs):
 
@@ -914,6 +923,9 @@ def run_train_new(model, train_iterator, valid_iterator, optim, criterion,
         tqdm.write(f"\nValid: loss - {val_loss:.4f} acc - {val_acc:.4f} auc - {val_auc:.4f}")
 
         lr = optim.param_groups[0]['lr']
+
+        tqdm.write(f'\nCurrent learning rate: {lr:4e}')
+
         history.append({"epoch":epoch, "lr": lr, 
                         **{"train_auc": train_auc, "train_acc": train_acc}, 
                         **{"valid_auc": val_auc, "valid_acc": val_acc}})
@@ -927,7 +939,7 @@ def run_train_new(model, train_iterator, valid_iterator, optim, criterion,
                 model_name = f"{model.__name__}_head_{conf.NUM_HEADS}_embed_{conf.NUM_EMBED}_seq_{conf.MAX_SEQ}"
                 model_name += f"_auc_{val_auc:.4f}.pt"
                 torch.save(model.state_dict(), os.path.join(MODEL_DIR, model_name))
-                print("Best epoch model saved.\n\n")
+                print("\n\nBest epoch model saved.\n\n")
         else:
             over_fit += 1
 

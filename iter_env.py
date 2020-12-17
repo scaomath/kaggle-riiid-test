@@ -1,5 +1,4 @@
 #%%
-from sakt.sakt import MAX_SEQ
 import sys
 import pandas as pd
 import numpy as np

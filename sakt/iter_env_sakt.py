@@ -19,7 +19,7 @@ from iter_env import *
 PRIVATE = False
 DEBUG = False
 LAST_N = 100
-VAL_BATCH_SIZE = 51_200
+VAL_BATCH_SIZE = 4096
 SIMU_PUB_SIZE = 25_000
 MAX_SEQ = 100
 
@@ -55,12 +55,13 @@ def set_predict(df):
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'\n\nUsing device: {device}')
 # model_file = find_sakt_model()
-model_file = '/home/scao/Documents/kaggle-riiid-test/model/sakt_head_10_embed_160_auc_0.7499.pt'
+# model_file = '/home/scao/Documents/kaggle-riiid-test/model/sakt_head_10_embed_160_auc_0.7499.pt'
+model_file = '/home/scao/Documents/kaggle-riiid-test/model/sakt_head_8_embed_256_seq_150_auc_0.7577.pt'
 tmp = model_file.split('_')
 structure = {'n_skills': 13523, 'n_embed': int(tmp[4]), 'n_head':int(tmp[2])}
 model_name = model_file.split('/')[-1]
 print(f'\nLoading {model_name}...\n')
-model = load_sakt_model(model_file, structure=structure)
+model, conf = load_sakt_model(model_file)
 print(f'\nLoaded {model_name}.\n')
 model.eval()
 
@@ -101,9 +102,8 @@ with tqdm(total=len_test) as pbar:
         current_test = current_test[current_test[CONTENT_TYPE_ID] == 0]
         
         '''prediction code here'''
-        test_dataset = TestDataset(train_group, current_test, 
-                                    conf.NUM_SKILLS)
-        test_dataloader = DataLoader(test_dataset, batch_size=conf.VAL_BATCH_SIZE, 
+        test_dataset = TestDataset(train_group, current_test, conf['n_skill'])
+        test_dataloader = DataLoader(test_dataset, batch_size=VAL_BATCH_SIZE, 
                                     shuffle=False, drop_last=False)
 
         output_all = []
@@ -120,7 +120,7 @@ with tqdm(total=len_test) as pbar:
 
         current_test[TARGET] = output_all
         set_predict(current_test.loc[:,[ROW_ID, TARGET]])
-        pbar.desc(f'Current batch test length: {len(current_test)}')
+        pbar.set_description(f'Current batch test length: {len(current_test)}')
         pbar.update(len(current_test))
 
 y_true = test_df[test_df.content_type_id == 0].answered_correctly

@@ -81,14 +81,13 @@ TQDM_INT = 8
 STAGE = "stage1"
 FOLD = 1
 DATE_STR = get_date()
-TRAIN = True
 DEBUG = False
 ROLLOUT = True
 EPOCHS = 60 if ROLLOUT else 13
 LEARNING_RATE = 1e-3
 NROWS_TRAIN = 5_000_000
 PREPROCESS = 2
-
+TRAIN = True
 
 class conf:
     METRIC_ = "max"
@@ -100,9 +99,10 @@ class conf:
     VAL_BATCH_SIZE = 4096
     NUM_EMBED = 256
     NUM_HEADS = 8
+    NUM_LAYERS = 2
     NUM_SKILLS = 13523 # len(skills)
     NUM_TIME = 300 # when scaled by 1000 and round, priori question time's unique values
-    MAX_SEQ = 150
+    MAX_SEQ = 100
     SCALING = 1 # scaling before sigmoid
     PATIENCE = 8 # overfit patience
     SAVING_THRESHOLD = 0.754 # the threshold for auc to save a model
@@ -113,7 +113,7 @@ class conf:
         map_location='cpu'
 #%%
 if PREPROCESS == 1:
-    print("\nLoading training csv...")
+    print("\n\nLoading training csv...")
     start = time()
     if DEBUG:
         data_df = pd.read_csv(DATA_DIR+'train.csv', 
@@ -146,7 +146,7 @@ if PREPROCESS == 1:
     print(f"Prcocessed train.csv in {time()-start} seconds.\n\n")
     train_group, valid_group = train_test_split(group, test_size=0.1)
 elif PREPROCESS == 2:
-    print("Loading training parquet...")
+    print("\n\nLoading training parquet...")
     start = time()
     train_df = pd.read_parquet(DATA_DIR+'cv3_train.parquet')
     valid_df = pd.read_parquet(DATA_DIR+'cv3_valid.parquet')
@@ -156,7 +156,7 @@ elif PREPROCESS == 2:
     valid_group = preprocess_sakt(valid_df)
     print(f"Prcocessed train.parquet in {time()-start} seconds.\n\n")
 else:
-    print("\nLoading preprocessed file...")
+    print("\n\nLoading preprocessed file...")
     with open(DATA_DIR+'sakt_data_new.pickle', 'rb') as f:
         group = pickle.load(f)
     train_group, valid_group = train_test_split(group, test_size=0.1)
@@ -191,14 +191,18 @@ print("prior question explained", len(item[4]), item[4])
 
 # %%
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = SAKTModelNew(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS)
-# model = SAKTMulti(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS)
+# model = SAKTModelNew(n_skill, embed_dim=conf.NUM_EMBED, 
+#                               num_heads=conf.NUM_HEADS,
+#                               num_layers=conf.NUM_LAYERS)
+model = SAKTMulti(n_skill, embed_dim=conf.NUM_EMBED, 
+                           num_heads=conf.NUM_HEADS)
 # optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.99, weight_decay=0.005)
 # optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 # scheduler = ReduceLROnPlateau(optimizer, 'min', patience=conf.PATIENCE-1, threshold=1e-4,verbose=1)
 # scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, eta_min=LEARNING_RATE*1e-2,verbose=1)
-scheduler = WarmupCosineSchedule(optimizer, warmup_steps=10, t_total=EPOCHS)
+# scheduler = WarmupCosineSchedule(optimizer, warmup_steps=10, t_total=EPOCHS)
+scheduler = WarmupCosineWithHardRestartsSchedule(optimizer, warmup_steps=10, t_total=EPOCHS, cycles=2)
 # scheduler = CyclicLR(optimizer, base_lr=1e-1*LEARNING_RATE, max_lr=LEARNING_RATE, step_size_up=5,mode="triangular2", verbose=1)
 # optimizer = HNAGOptimizer(model.parameters(), lr=1e-3) 
 criterion = nn.BCEWithLogitsLoss()

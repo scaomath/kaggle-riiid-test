@@ -26,6 +26,7 @@ HOME = "/home/scao/Documents/kaggle-riiid-test/"
 sys.path.append(HOME) 
 from utils import *
 from sakt import *
+from transformer_optimizers import *
 
 print('Python     : ' + sys.version.split('\n')[0])
 print('Numpy      : ' + np.__version__)
@@ -43,7 +44,11 @@ which is an implementation of this paper: https://arxiv.org/pdf/1907.06837.pdf
 To-do:
 
 1. check the bias of the prediction
+
 2. replicate the no cv result on kaggle with LB 0.771
+
+3. Change the last several layers to embed_dim->embed_dim//2 ->1, deleted the skip connection.
+seq len=150, embed_dim = 256 with 8 heads, CV 0.7577; iter_env CV 0.7539
 
 '''
 
@@ -57,7 +62,6 @@ TRAIN = True
 PREPROCESS = 2
 EPOCHS = 60
 LEARNING_RATE = 1e-3
-PATIENCE = 5
 DATE_STR = get_date()
 
 class conf:
@@ -65,16 +69,18 @@ class conf:
     FILLNA_VAL = 14_000 # for prior question elapsed time, rounded average in train
     TQDM_INT = 8
     WORKERS = 8 # 0
+    SCALING = 1 # scaling before sigmoid
     LEARNING_RATE = 1e-3
     BATCH_SIZE = 1024
     VAL_BATCH_SIZE = 4096
-    NUM_EMBED = 128
+    NUM_EMBED = 256
+    NUM_LAYERS = 2
     NUM_HEADS = 8
     NUM_SKILLS = 13523 # len(skills)
     NUM_TIME = 300 # when scaled by 1000 and round, priori question time's unique values
     MAX_SEQ = 150
-    SCALING = 2 # scaling before sigmoid
     PATIENCE = 6 # overfit patience
+    SAVING_THRESHOLD = 0.754  # the threshold for auc to save a model
 
     if torch.cuda.is_available():
         map_location = lambda storage, loc: storage.cuda()
@@ -148,13 +154,15 @@ print("\n\nlabel", len(item[2]), item[2])
 # %%
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model = SAKTModel(n_skill, embed_dim=conf.NUM_EMBED, num_heads=conf.NUM_HEADS)
+model = SAKTModel(n_skill, embed_dim=conf.NUM_EMBED, 
+                           num_heads=conf.NUM_HEADS)
 # optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.99, weight_decay=0.005)
 optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.2,
-                              patience=conf.PATIENCE,
-                              cooldown=conf.PATIENCE//2, 
-                              threshold=1e-5, verbose=1)
+# scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.2,
+#                               patience=conf.PATIENCE,
+#                               cooldown=conf.PATIENCE//2, 
+#                               threshold=1e-5, verbose=1)
+scheduler = WarmupCosineSchedule(optimizer, warmup_steps=10, t_total=EPOCHS)
 # scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=5, eta_min=LEARNING_RATE*1e-2, verbose=1)
 # scheduler = CyclicLR(optimizer, base_lr=1e-1*LEARNING_RATE, max_lr=LEARNING_RATE, step_size_up=5,mode="triangular2", verbose=1)
 # optimizer = HNAGOptimizer(model.parameters(), lr=1e-3) 
@@ -165,7 +173,7 @@ criterion.to(device)
 num_params = get_num_params(model)
 print(f"\n\n# heads  : {conf.NUM_HEADS}")
 print(f"# embed  : {conf.NUM_EMBED}")
-print(f"seq len  : {conf.MAX_SEQ}")
+print(f"# seqlen : {conf.MAX_SEQ}")
 print(f"# params : {num_params}")
 # %%
 
