@@ -13,13 +13,53 @@ import psutil
 import torch
 from sklearn.metrics import roc_auc_score
 
+
+def get_size(bytes, suffix="B"):
+    """
+    Scale bytes to its proper format
+    e.g:
+        1253656 => '1.20MB'
+        1253656678 => '1.17GB'
+    """
+    factor = 1024
+    for unit in ["", "K", "M", "G", "T", "P"]:
+        if bytes < factor:
+            return f"{bytes:.2f}{unit}{suffix}"
+        bytes /= factor
+
 def get_system():
+    print("="*40, "CPU Info", "="*40)
+    # number of cores
+    print("Physical cores    :", psutil.cpu_count(logical=False))
+    print("Total cores       :", psutil.cpu_count(logical=True))
+    # CPU frequencies
+    cpufreq = psutil.cpu_freq()
+    print(f"Max Frequency    : {cpufreq.max:.2f}Mhz")
+    print(f"Min Frequency    : {cpufreq.min:.2f}Mhz")
+    print(f"Current Frequency: {cpufreq.current:.2f}Mhz")
+
+    print("="*40, "Memory Info", "="*40)
+    # get the memory details
+    svmem = psutil.virtual_memory()
+    print(f"Total     : {get_size(svmem.total)}")
+    print(f"Available : {get_size(svmem.available)}")
+    print(f"Used      : {get_size(svmem.used)}")
+
+
+    print("="*40, "Software Info", "="*40)
     print('Python     : ' + sys.version.split('\n')[0])
     print('Numpy      : ' + np.__version__)
     print('Pandas     : ' + pd.__version__)
     print('PyTorch    : ' + torch.__version__)
-    DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    print(f'Device     : {DEVICE}')
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+   
+    if device.type == 'cuda':
+        print("="*40, "GPU Info", "="*40)
+        print(f'Device     : {device}')
+        print(torch.cuda.get_device_name(0))
+        print(f"{'Mem allocated': <15}: {round(torch.cuda.memory_allocated(0)/1024**3,1)} GB")
+        print(f"{'Mem cached': <15}: {round(torch.cuda.memory_reserved(0)/1024**3,1)} GB")
+    
 
 def get_seed(s):
     rd.seed(s)
@@ -42,11 +82,6 @@ def timer(title):
     yield
     print("{} - done in {:.1f} seconds.\n".format(title, time() - t0))
 
-def cpu_stats():
-    pid = os.getpid()
-    py = psutil.Process(pid)
-    memory_use = py.memory_info()[0] / 2. ** 30
-    print(f'Memory     : {str(np.round(memory_use, 2))} GB' )
 
 def get_date():
     today = date.today()
@@ -104,5 +139,4 @@ def reduce_mem_usage(df, verbose=True):
 
 if __name__ == "__main__":
     get_system()
-    cpu_stats()
     

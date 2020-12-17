@@ -13,6 +13,7 @@ from sklearn.metrics import roc_auc_score
 from torch.autograd import Variable
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 from torch.utils.data import DataLoader, Dataset
+from torch.utils.data.dataset import T
 from tqdm import tqdm
 
 HOME =  "/home/scao/Documents/kaggle-riiid-test/"
@@ -28,7 +29,7 @@ This file contains the datatset class and feature engineering functions
 '''
 
 FILLNA_VAL = 140_000
-LAST_N = 150
+MAX_SEQ = 150
 TQDM_INT = 8
 PAD = 0
 FOLD = 1
@@ -137,7 +138,7 @@ def get_valid(train_df, n_tail=50):
 
 
 def preprocess(data_df, question_df):
-    data_df = data_df.copy(deep=True)
+    data_df = data_df.copy()
     data_df['prior_question_had_explanation'] = \
             data_df['prior_question_had_explanation'].astype(np.float16).fillna(0).astype(np.int8)
     data_df = data_df[data_df['content_type_id'] == 0]
@@ -145,13 +146,13 @@ def preprocess(data_df, question_df):
     part_ids_map = dict(zip(question_df['question_id'], question_df['part']))
     data_df['part_id'] = data_df['content_id'].map(part_ids_map)
 
-    data_df["prior_question_elapsed_time"].fillna(FILLNA_VAL, inplace=True) 
+    data_df["prior_question_elapsed_time"] = data_df["prior_question_elapsed_time"].fillna(FILLNA_VAL) 
     # FILLNA_VAL different than all current values
     data_df["prior_question_elapsed_time"] = data_df["prior_question_elapsed_time"] // 1000
     return data_df
 
 
-def get_feats(data_df, max_seq=LAST_N):
+def get_feats(data_df, max_seq=MAX_SEQ):
     '''
     Using a deque as it automatically limits the max_size as per the Data Strucutre's defination itself
     so we don't need to manage that...
@@ -159,10 +160,10 @@ def get_feats(data_df, max_seq=LAST_N):
     '''
     df = {}
     user_id_to_idx = {}
-    grp = data_df.groupby("user_id", sort=False).tail(max_seq) # Select last_n rows of each user.
+    grp = data_df.groupby("user_id", sort=False).tail(max_seq) # Select MAX_SEQ rows of each user.
     grp_user = grp.groupby("user_id", sort=False)
     num_user_id_grp = len(grp_user)
-
+    # with tqdm(total=num_user_id_grp) as pbar:
     for idx, row in grp_user.agg({
         "content_id":list, 
         "answered_correctly":list, 
@@ -197,12 +198,14 @@ def get_feats(data_df, max_seq=LAST_N):
             "padded" : deque([False]*len(row["content_id"]) + [True]*num_padding, maxlen=max_seq)
             }
         user_id_to_idx[row["user_id"]] = idx
+            # if idx % TQDM_INT == 0:
+            #     pbar.update(TQDM_INT)
             
         # if in future a new user comes, we will just increase the counts as of now... <WIP>
     return df, user_id_to_idx
 
 
-def get_feats_val(data_df, max_seq=LAST_N):
+def get_feats_val(data_df, max_seq=MAX_SEQ):
     '''
     Using a deque as it automatically limits the max_size as per the Data Strucutre's defination itself
     so we don't need to manage that...
@@ -210,7 +213,7 @@ def get_feats_val(data_df, max_seq=LAST_N):
     '''
     df = {}
     user_id_to_idx = {}
-    grp = data_df.groupby("user_id", sort=False).tail(max_seq) # Select last_n rows of each user.
+    grp = data_df.groupby("user_id", sort=False).tail(max_seq) # Select MAX_SEQ rows of each user.
     grp_user = grp.groupby("user_id", sort=False)
     num_user_id_grp = len(grp_user)
 
@@ -254,14 +257,14 @@ def get_feats_val(data_df, max_seq=LAST_N):
         # if in future a new user comes, we will just increase the counts as of now... <WIP>
     return df, user_id_to_idx
 
-def get_feats_test(data_df, max_seq=LAST_N):
+def get_feats_test(data_df, max_seq=MAX_SEQ):
     '''
     Using a deque as it automatically limits the max_size as per the Data Strucutre's defination itself
     so we don't need to manage that...
     '''
     df = {}
     user_id_to_idx = {}
-    grp = data_df.groupby("user_id", sort=False).tail(max_seq) # Select last_n rows of each user.
+    grp = data_df.groupby("user_id", sort=False).tail(max_seq) # Select MAX_SEQ rows of each user.
     grp_user = grp.groupby("user_id", sort=False)
     
     for idx, row in grp_user.agg({
@@ -271,7 +274,7 @@ def get_feats_test(data_df, max_seq=LAST_N):
         "prior_question_elapsed_time":list
         }).reset_index().iterrows():
         # here we make a split whether a user has more than equal to 100 entries or less than that
-        # if it's less than LAST_N, then we need to PAD it using the PAD token defined as 0 by me in this cell block
+        # if it's less than MAX_SEQ, then we need to PAD it using the PAD token defined as 0 by me in this cell block
         # also, padded will be True where we have done padding obviously, rest places it's False.
         if len(row["content_id"]) >= max_seq:
             df[idx] = {
@@ -297,7 +300,64 @@ def get_feats_test(data_df, max_seq=LAST_N):
         user_id_to_idx[row["user_id"]] = idx
 
     return df, user_id_to_idx
-    
+
+def update_users(d, d_new, uid_to_idx, uid_to_idx_new, test_flag=False):
+    '''
+    Add the user's features from d to d_new
+    During inference:
+    1. add user's feature from previous df to train df (old=prev test, new=train)
+    2. after reading current test df, add user's from train df to test df (old=train, new=current test)
+
+    '''
+    feature_cols =  ['content_id', 
+            'answered_correctly', 
+            'task_container_id', 
+            'prior_question_elapsed_time',
+            'part_id',
+            ]
+    mask_cols = ['padded',
+            'pred_mask']
+    for uid_test, idx_test in uid_to_idx_new.items():
+        if uid_test in uid_to_idx.keys():
+            idx_train = uid_to_idx[uid_test]
+            old_user_mask = [not s for s in d[idx_train]['padded']]
+
+            old_user = []
+            for col in feature_cols:
+                old_user.append(np.array(d[idx_train][col])[old_user_mask])
+            
+            new_user_mask = [not s for s in d_new[idx_test]['padded']]
+            len_user_pred = sum(new_user_mask)
+            # print(len_user_pred)
+            for idx_feat, feat in enumerate(feature_cols):
+                new_user_update = np.append(old_user[idx_feat],
+                                            np.array(d_new[idx_test][feat])[new_user_mask])
+                len_user = len(new_user_update) # the length of the current user after update
+                # print(len_user)
+                if len_user >= MAX_SEQ:
+                    d_new[idx_test][feat] = deque(new_user_update[-MAX_SEQ:], maxlen=MAX_SEQ)
+                    
+                else:
+                    num_padding = MAX_SEQ - len_user
+                    d_new[idx_test][feat] = deque(np.append(new_user_update, 
+                    np.zeros(num_padding, dtype=int)), maxlen=MAX_SEQ)
+                    
+            if test_flag:
+                assert MAX_SEQ >= len_user_pred
+                if len_user >= MAX_SEQ:
+                    d_new[idx_test]['padded'] = deque([False]*MAX_SEQ, maxlen=MAX_SEQ)
+                    d_new[idx_test]['pred_mask'] = \
+                        deque([False]*(MAX_SEQ-len_user_pred) + [True]*len_user_pred, maxlen=MAX_SEQ)
+                else:       
+                    num_padding = MAX_SEQ - len_user
+                    
+                    d_new[idx_test]['padded'] = deque([False]*len_user + [True]*num_padding, maxlen=MAX_SEQ)
+
+                    d_new[idx_test]['pred_mask'] = \
+                                deque([False]*(len_user-len_user_pred) + [True]*len_user_pred + [False]*num_padding, 
+                                maxlen=MAX_SEQ)
+    return d_new
+
 def collate_fn(batch):
     _, content_id, task_id, part_id, prior_question_elapsed_time, padded, labels = zip(*batch)
     content_id = torch.Tensor(content_id).long()
@@ -336,7 +396,7 @@ def future_mask(seq_len):
     mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
     return mask
 
-def pad_seq(seq: List[int], max_batch_len: int = LAST_N, pad_value: int = True) -> List[int]:
+def pad_seq(seq: List[int], max_batch_len: int = MAX_SEQ, pad_value: int = True) -> List[int]:
     '''this is not used'''
     return seq + (max_batch_len - len(seq)) * [pad_value]
 
@@ -530,7 +590,7 @@ if __name__ == "__main__":
     print(f"Readding train.csv in {time()-start} seconds")
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = TransformerModel(ninp=LAST_N, nhead=4, nhid=128, nlayers=3, dropout=0.3)
+    model = TransformerModel(ninp=MAX_SEQ, nhead=4, nhid=128, nlayers=3, dropout=0.3)
     model = model.to(device)
     # print("Loading state_dict...")
     # model.load_state_dict(torch.load(MODEL_DIR+'model_best_epoch.pt', map_location=device))

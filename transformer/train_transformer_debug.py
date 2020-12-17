@@ -9,6 +9,7 @@ import dask.dataframe as dd
 import datatable as dt
 import numpy as np
 import pandas as pd
+import dask.dataframe as dd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -28,7 +29,7 @@ from utils import *
 from iter_env import *
 get_system()
 from transformer import *
-
+from transformer_optimizers import *
 # %%
 '''
 To-do:
@@ -52,6 +53,7 @@ TRAIN_DTYPES = {
     'prior_question_elapsed_time': np.float32,
     'prior_question_had_explanation': 'boolean'
 }
+TRAIN_COLS = list(TRAIN_DTYPES.keys())
 
 TEST_DTYPES = {
     # 'row_id': np.uint32,
@@ -74,8 +76,8 @@ NUM_LAYERS = 2 # number of transformer blocks
 FILLNA_VAL = 100 # fillers for the values (a unique value)
 TQDM_INT = 15 # tqdm update interval
 PAD = 0
-BATCH_SIZE = 128
-VAL_BATCH_SIZE = 2048
+BATCH_SIZE = 512
+VAL_BATCH_SIZE = 4096
 TEST_BATCH_SIZE = 51200
 
 NROWS_TRAIN = 5_000_000
@@ -84,9 +86,9 @@ NROWS_TEST = 250_000
 SIMU_PUB_SIZE = 25_000
 DEBUG_PUB_SIZE = 1000
 
-EPOCHS = 20
+EPOCHS = 40
 
-DEBUG = True
+DEBUG = False
 TRAIN = False
 
 
@@ -101,8 +103,9 @@ else:
     train_df = pd.read_parquet(DATA_DIR+'cv3_train.parquet')
     valid_df = pd.read_parquet(DATA_DIR+'cv3_valid.parquet')
 
-train_df = train_df[TRAIN_DTYPES.keys()]
-valid_df = valid_df[TRAIN_DTYPES.keys()]
+#%%
+train_df = train_df[TRAIN_COLS]
+valid_df = valid_df[TRAIN_COLS]
 train_df = train_df[train_df['content_type_id'] == False].reset_index(drop = True)
 valid_df = valid_df[valid_df['content_type_id'] == False].reset_index(drop = True)
 
@@ -159,7 +162,10 @@ print(f"# params : {num_params}")
 criterion = nn.CrossEntropyLoss()
 lr = 1e-3 
 optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-
+# optimizer = AdamW(model.parameters(), lr=lr)
+# scheduler = ReduceLROnPlateau(optimizer, 'min', patience=conf.PATIENCE-1, threshold=1e-4,verbose=1)
+# scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, eta_min=LEARNING_RATE*1e-2,verbose=1)
+scheduler = WarmupCosineSchedule(optimizer, warmup_steps=10, t_total=EPOCHS)
 #%%
 losses = []
 history = []
@@ -172,12 +178,14 @@ if TRAIN:
         print(f"Train: loss - {train_loss:.2f} acc - {train_acc:.4f} auc - {train_auc:.4f}")
         valid_loss, valid_acc, valid_auc = valid_epoch(model, val_loader, criterion)
         print(f"\nValid: loss - {valid_loss:.2f} acc - {valid_acc:.4f} auc - {valid_auc:.4f}")
+        scheduler.step()
         lr = optimizer.param_groups[0]['lr']
         history.append({"epoch":epoch, "lr": lr, 
                         **{"train_auc": train_auc, "train_acc": train_acc}, 
                         **{"valid_auc": valid_auc, "valid_acc": valid_acc}})
+        print(f"\nLearning rate : {lr} ")
         if valid_auc > auc_max:
-            print(f"[Epoch {epoch}/{EPOCHS}] auc improved from {auc_max:.4f} to {valid_auc:.4f}") 
+            print(f"\n[Epoch {epoch}/{EPOCHS}] auc improved from {auc_max:.4f} to {valid_auc:.4f}") 
             print("saving model ...")
             auc_max = valid_auc
             torch.save(model.state_dict(), os.path.join(MODEL_DIR, 
@@ -189,8 +197,8 @@ else:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         print(f'\n Using device: {device} \n')
         model_files = find_files(name='transformer',path=MODEL_DIR)
-        # model_file = model_files[1]
-        model_file = '/home/scao/Documents/kaggle-riiid-test/model/transformer_orig_auc_0.7182.pt'
+        model_file = model_files[0]
+        # model_file = '/home/scao/Documents/kaggle-riiid-test/model/transformer_orig_auc_0.7182.pt'
         conf = dict(ninp=NUM_EMBED, 
                     nhead=NUM_HEADS, 
                     nhid=NUM_HIDDEN, 
@@ -329,8 +337,9 @@ print('Validation auc:', roc_auc_score(y_true, y_pred))
 # %% Using iter_env
 print("Loading test set....")
 test_df = pd.read_parquet(DATA_DIR+'cv2_valid.parquet')
-# test_df = test_df[:SIMU_PUB_SIZE].copy()
-test_df = test_df[:DEBUG_PUB_SIZE].copy()
+test_df = test_df[:SIMU_PUB_SIZE].copy()
+# test_df = test_df[NROWS_TEST:NROWS_TEST+DEBUG_PUB_SIZE].copy() # okay
+# test_df = test_df[:DEBUG_PUB_SIZE].copy() # not good
 print("Loaded test.")
 print(f"Simulated iter_env with {test_df['user_id'].nunique()} users.")
 #%%
@@ -397,6 +406,17 @@ def collate_fn_val(batch):
     # remember the order
     return content_id, task_id, part_id, prior_question_elapsed_time, padded, labels, pred_mask
 
+def collate_fn_test(batch):
+    _, content_id, task_id, part_id, prior_question_elapsed_time, padded, pred_mask = zip(*batch)
+    content_id = torch.Tensor(content_id).long()
+    task_id = torch.Tensor(task_id).long()
+    part_id = torch.Tensor(part_id).long()
+    prior_question_elapsed_time = torch.Tensor(prior_question_elapsed_time).long()
+    padded = torch.Tensor(padded).bool()
+    pred_mask = torch.Tensor(pred_mask).bool()
+    # remember the order
+    return content_id, task_id, part_id, prior_question_elapsed_time, padded, pred_mask
+
 def update_users(d, d_new, uid_to_idx, uid_to_idx_new, test_flag=False):
     '''
     Add the user's features from d to d_new
@@ -424,12 +444,14 @@ def update_users(d, d_new, uid_to_idx, uid_to_idx_new, test_flag=False):
             
             new_user_mask = [not s for s in d_new[idx_test]['padded']]
             len_user_pred = sum(new_user_mask)
+            # print(len_user_pred)
             for idx_feat, feat in enumerate(feature_cols):
                 new_user_update = np.append(old_user[idx_feat],
                                             np.array(d_new[idx_test][feat])[new_user_mask])
                 len_user = len(new_user_update) # the length of the current user after update
+                # print(len_user)
                 if len_user >= MAX_SEQ:
-                    d_new[idx_test][feat] = deque(new_user_update, maxlen=MAX_SEQ)
+                    d_new[idx_test][feat] = deque(new_user_update[-MAX_SEQ:], maxlen=MAX_SEQ)
                     
                 else:
                     num_padding = MAX_SEQ - len_user
@@ -437,19 +459,19 @@ def update_users(d, d_new, uid_to_idx, uid_to_idx_new, test_flag=False):
                     np.zeros(num_padding, dtype=int)), maxlen=MAX_SEQ)
                     
             if test_flag:
+                assert MAX_SEQ >= len_user_pred
                 if len_user >= MAX_SEQ:
                     d_new[idx_test]['padded'] = deque([False]*MAX_SEQ, maxlen=MAX_SEQ)
                     d_new[idx_test]['pred_mask'] = \
                         deque([False]*(MAX_SEQ-len_user_pred) + [True]*len_user_pred, maxlen=MAX_SEQ)
-                else:
-                    
+                else:       
                     num_padding = MAX_SEQ - len_user
+                    
                     d_new[idx_test]['padded'] = deque([False]*len_user + [True]*num_padding, maxlen=MAX_SEQ)
 
                     d_new[idx_test]['pred_mask'] = \
-                                deque([False]*(MAX_SEQ-len_user+len_user_pred) \
-                                    + [True]*len_user_pred + [False]*num_padding, 
-                                    maxlen=MAX_SEQ)
+                                deque([False]*(len_user-len_user_pred) + [True]*len_user_pred + [False]*num_padding, 
+                                maxlen=MAX_SEQ)
     return d_new
 
 #%%
@@ -504,10 +526,9 @@ with tqdm(total=len_test) as pbar:
             mask = Variable(mask.cuda())
 
             with torch.no_grad():
-                output = model(content_id, part_id, prior_question_elapsed_time, 
-                              mask_src=future_mask, mask_padding= mask)
+                output = model(content_id, part_id, prior_question_elapsed_time, mask_padding= mask)
 
-            pred_probs = torch.softmax(output[~mask], dim=1)
+            pred_probs = torch.softmax(output[pred_mask], dim=1)
             output_all.extend(pred_probs[:,1].reshape(-1).data.cpu().numpy())
             labels_all.extend(labels[~mask].reshape(-1).data.numpy())
         '''prediction code ends'''
@@ -516,9 +537,9 @@ with tqdm(total=len_test) as pbar:
         set_predict(current_test.loc[:,['row_id', 'answered_correctly']])
         pbar.update(len(current_test))
 
-        if DEBUG:
-            tqdm.write(f"  Iteration {idx}")
-            if idx == 2: break
+        # if DEBUG:
+        #     tqdm.write(f"  Iteration {idx}")
+        #     if idx == 2: break
 
 #%%
 y_true = test_df[test_df.content_type_id == 0]['answered_correctly']
@@ -731,17 +752,121 @@ class RiiidVal(Dataset):
     self.d[idx]["part_id"], self.d[idx]["prior_question_elapsed_time"], self.d[idx]["padded"], \
     self.d[idx]["answered_correctly"],  self.d[idx]["pred_mask"]
 
+
+def update_users(d, d_new, uid_to_idx, uid_to_idx_new, test_flag=False):
+    '''
+    Add the user's features from d to d_new
+    During inference:
+    1. add user's feature from previous df to train df (old=prev test, new=train)
+    2. after reading current test df, add user's from train df to test df (old=train, new=current test)
+
+    '''
+    feature_cols =  ['content_id', 
+            'answered_correctly', 
+            'task_container_id', 
+            'prior_question_elapsed_time',
+            'part_id',
+            ]
+    mask_cols = ['padded',
+            'pred_mask']
+    for uid_test, idx_test in uid_to_idx_new.items():
+        if uid_test in uid_to_idx.keys():
+            idx_train = uid_to_idx[uid_test]
+            old_user_mask = [not s for s in d[idx_train]['padded']]
+
+            old_user = []
+            for col in feature_cols:
+                old_user.append(np.array(d[idx_train][col])[old_user_mask])
+            
+            new_user_mask = [not s for s in d_new[idx_test]['padded']]
+            len_user_pred = sum(new_user_mask)
+            # print(len_user_pred)
+            for idx_feat, feat in enumerate(feature_cols):
+                new_user_update = np.append(old_user[idx_feat],
+                                            np.array(d_new[idx_test][feat])[new_user_mask])
+                len_user = len(new_user_update) # the length of the current user after update
+                # print(len_user)
+                if len_user >= MAX_SEQ:
+                    d_new[idx_test][feat] = deque(new_user_update[-MAX_SEQ:], maxlen=MAX_SEQ)
+                    
+                else:
+                    num_padding = MAX_SEQ - len_user
+                    d_new[idx_test][feat] = deque(np.append(new_user_update, 
+                    np.zeros(num_padding, dtype=int)), maxlen=MAX_SEQ)
+
+            print(f'\nTotal len for user {uid_test}: {len_user}')
+ 
+            if test_flag:
+                assert MAX_SEQ >= len_user_pred
+                if len_user >= MAX_SEQ:
+                    d_new[idx_test]['padded'] = deque([False]*MAX_SEQ, maxlen=MAX_SEQ)
+                    print("\nSeq more or equal than max_seq")
+                    print(MAX_SEQ-len_user_pred,len_user_pred)
+                    d_new[idx_test]['pred_mask'] = \
+                        deque([False]*(MAX_SEQ-len_user_pred) + [True]*len_user_pred, maxlen=MAX_SEQ)
+                else:       
+                    num_padding = MAX_SEQ - len_user
+                    print("\nSeq less than max_seq")
+                    print(MAX_SEQ-len_user+len_user_pred,len_user_pred, num_padding)
+                    d_new[idx_test]['padded'] = deque([False]*len_user + [True]*num_padding, maxlen=MAX_SEQ)
+                    '''
+                    Debugging notes:
+                    the bugged version uses MAX_SEQ - len_user + len_user_pred as the 
+                    first mask, which was wrong
+                    '''
+                    d_new[idx_test]['pred_mask'] = \
+                                deque([False]*(len_user-len_user_pred) + [True]*len_user_pred + [False]*num_padding, 
+                                maxlen=MAX_SEQ)
+        else:
+            for feat in feature_cols:
+                assert MAX_SEQ == len(d_new[idx_test][feat])
+    return d_new
+
 def collate_fn_val(batch):
     _, content_id, task_id, part_id, prior_question_elapsed_time, padded, labels, pred_mask = zip(*batch)
+ 
     content_id = torch.Tensor(content_id).long()
     task_id = torch.Tensor(task_id).long()
     part_id = torch.Tensor(part_id).long()
     prior_question_elapsed_time = torch.Tensor(prior_question_elapsed_time).long()
     padded = torch.Tensor(padded).bool()
     labels = torch.Tensor(labels)
+    for i in range(len(pred_mask)):
+        # print(len(pred_mask[i]))
+        # print("\n")
+        if len(pred_mask[i])==80 or len(pred_mask[i])==128:
+            print(content_id[i])
+            print(pred_mask[i])   
     pred_mask = torch.Tensor(pred_mask).bool()
-    # remember the order
+    print((content_id).shape)
+    print((labels).shape)
+    print((pred_mask).shape)
     return content_id, task_id, part_id, prior_question_elapsed_time, padded, labels, pred_mask
+
+def collate_fn(batch):
+    _, content_id, task_id, part_id, prior_question_elapsed_time, padded, labels = zip(*batch)
+    content_id = torch.Tensor(content_id).long()
+    task_id = torch.Tensor(task_id).long()
+    part_id = torch.Tensor(part_id).long()
+    prior_question_elapsed_time = torch.Tensor(prior_question_elapsed_time).long()
+    padded = torch.Tensor(padded).bool()
+    labels = torch.Tensor(labels)
+    # remember the order
+    return content_id, task_id, part_id, prior_question_elapsed_time, padded, labels
+
+
+print("Loading test set....")
+test_df = pd.read_parquet(DATA_DIR+'cv2_valid.parquet')
+# test_df = test_df[:SIMU_PUB_SIZE].copy()
+# test_df = test_df[NROWS_TEST:NROWS_TEST+DEBUG_PUB_SIZE].copy() # okay
+test_df = test_df[:DEBUG_PUB_SIZE].copy() # not good
+print("Loaded test.")
+print(f"Simulated iter_env with {test_df['user_id'].nunique()} users.")
+
+iter_test = Iter_Valid(test_df, max_user=1000)
+predicted = []
+def set_predict(df):
+    predicted.append(df)
 
 for idx, (current_test, current_prediction_df) in enumerate(iter_test):
     break
@@ -750,20 +875,38 @@ current_test = preprocess(current_test, df_questions)
 d_test, user_id_to_idx_test = get_feats_val(current_test, max_seq=MAX_SEQ)
 d_test = update_users(d, d_test, user_id_to_idx_train, user_id_to_idx_test, test_flag=True)
 dataset_test = RiiidVal(d=d_test)
+
 test_loader = DataLoader(dataset=dataset_test, 
                             batch_size=TEST_BATCH_SIZE, 
                             collate_fn=collate_fn_val, 
+                            shuffle=False, drop_last=False)
+
+d_test_compare, _ = get_feats(current_test, max_seq=MAX_SEQ)
+dataset_test_compare = Riiid(d=d_test_compare)
+test_loader_compare = DataLoader(dataset=dataset_test_compare, 
+                            batch_size=TEST_BATCH_SIZE, 
+                            collate_fn=collate_fn, 
                             shuffle=False, drop_last=False)
 
 # the problem with current feature gen is that 
 # using groupby user_id sorts the user_id and makes it different from the 
 # test_df's order
 sample0 = dataset_test.__getitem__(0)
-sample1 = dataset_test.__getitem__(1)
+sample1 = dataset_test_compare.__getitem__(0)
 
-for i in range(1,len(sample1)):
-    print(len(sample0[i]))
+# for i in range(1,len(sample0)):
+#     print(len(sample0[i]))
+# print(type(sample0[-1]))
 
-# for _, batch in enumerate(test_loader):
-#     break
+# for i in range(1,len(sample1)):
+#     print(len(sample1[i]))
+# print(type(sample1[-1]))
+
+for idx, batch in enumerate(test_loader_compare):
+    if idx == len(test_loader_compare):
+        print(1)
+
+for idx, batch in enumerate(test_loader):
+    if idx == len(test_loader):
+        print(1)
 # %%

@@ -1,4 +1,5 @@
 #%%
+from sakt.sakt import MAX_SEQ
 import sys
 import pandas as pd
 import numpy as np
@@ -12,8 +13,9 @@ DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
 MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
 PRIVATE = False
 DEBUG = False
-LAST_N = 100
+MAX_SEQ = 150
 VAL_BATCH_SIZE = 4096
+TEST_BATCH_SIZE = 4096
 SIMU_PUB_SIZE = 25_000
 
 #%%
@@ -107,9 +109,12 @@ if __name__ == "__main__":
     else:
         test_df = pd.read_pickle(DATA_DIR+'test_pub_simu.pickle')
         test_df = test_df[:SIMU_PUB_SIZE]
-        train_df = pd.read_parquet(DATA_DIR+'cv2_valid.parquet')
-    print("Loaded test.")
+    
     df_questions = pd.read_csv(DATA_DIR+'questions.csv')
+    train_df = pd.read_parquet(DATA_DIR+'cv2_valid.parquet')
+    train_df = preprocess(train_df, df_questions)
+    d, user_id_to_idx_train = get_feats(train_df)
+    print("Loaded test.")
     iter_test = Iter_Valid(test_df, max_user=1000)
     predicted = []
     def set_predict(df):
@@ -117,69 +122,55 @@ if __name__ == "__main__":
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'\n\n Using device: {device} \n\n')
-    model_file = find_best_model()
-    model_name = model_file.split('/')[-1]
-    model = load_model(model_file)
-    print(f'\nLoaded {model_name}.')
+    model_files = find_files(name='transformer',path=MODEL_DIR)
+    model_file = model_files[0]
+    # model_file = '/home/scao/Documents/kaggle-riiid-test/model/transformer_head_8_embed_512_seq_150_auc_0.7515.pt'
+    conf = dict(ninp=512, 
+                nhead=8, 
+                nhid=128, 
+                nlayers=2, 
+                dropout=0.3)
+    model = load_model(model_file, conf=conf)
+    print(f'\nLoaded {model_file}.')
     model.eval()
     print(model)
 
+    prev_test_df = None
     len_test = len(test_df)
     with tqdm(total=len_test) as pbar:
-        previous_test_df = None
-        for (current_test, current_prediction_df) in iter_test:
+        for idx, (current_test, current_prediction_df) in enumerate(iter_test):
+            
+            '''
+            concised iter_env
+            '''
             if prev_test_df is not None:
                 '''Making use of answers to previous questions'''
                 answers = eval(current_test["prior_group_answers_correct"].iloc[0])
                 responses = eval(current_test["prior_group_responses"].iloc[0])
                 prev_test_df['answered_correctly'] = answers
                 prev_test_df['user_answer'] = responses
-                prev_test_df = prev_test_df[prev_test_df[CONTENT_TYPE_ID] == False]
-                prev_group = prev_test_df[[USER_ID, CONTENT_ID, 
-                                        PRIOR_QUESTION_TIME, PRIOR_QUESTION_EXPLAIN, TARGET]]\
-                                        .groupby(USER_ID)\
-                                        .apply(lambda r: (r[CONTENT_ID].values, 
-                                                        r[PRIOR_QUESTION_TIME].values,
-                                                        r[PRIOR_QUESTION_EXPLAIN].values,
-                                                        r[TARGET].values))
-                for prev_user_id in prev_group.index:
-                    prev_group_content = prev_group[prev_user_id][0]
-                    prev_group_ac = prev_group[prev_user_id][1]
-                    prev_group_time = prev_group[prev_user_id][2]
-                    prev_group_exp = prev_group[prev_user_id][3]
-                    
-                    if prev_user_id in train_group.index:
-                        train_group[prev_user_id] = (np.append(train_group[prev_user_id][0],prev_group_content), 
-                                            np.append(train_group[prev_user_id][1],prev_group_ac),
-                                            np.append(train_group[prev_user_id][2],prev_group_time),
-                                            np.append(train_group[prev_user_id][3],prev_group_exp))
-        
-                    else:
-                        train_group[prev_user_id] = (prev_group_content,
-                                            prev_group_ac,
-                                            prev_group_time,
-                                            prev_group_exp)
-                    
-                    if len(train_group[prev_user_id][0])>MAX_SEQ:
-                        new_group_content = train_group[prev_user_id][0][-MAX_SEQ:]
-                        new_group_ac = train_group[prev_user_id][1][-MAX_SEQ:]
-                        new_group_time = train_group[prev_user_id][2][-MAX_SEQ:]
-                        new_group_exp = train_group[prev_user_id][3][-MAX_SEQ:]
-                        train_group[prev_user_id] = (new_group_content,
-                                            new_group_ac,
-                                            new_group_time,
-                                            new_group_exp)
-            '''No labels'''
-            # d_test, user_id_to_idx = get_feats_test(current_test_df)
+
+                prev_test_df = prev_test_df[prev_test_df['content_type_id'] == False]
+                prev_test_df = preprocess(prev_test_df, df_questions)
+                d_prev, user_id_to_idx_prev = get_feats(prev_test_df)
+                d = update_users(d_prev, d, user_id_to_idx_prev, user_id_to_idx_train)
+
+            # no labels
+            # d_test, user_id_to_idx = get_feats_test(current_test)
             # dataset_test = RiiidTest(d=d_test)
-            # test_dataloader = DataLoader(dataset=dataset_test, batch_size=VAL_BATCH_SIZE, 
+            # test_loader = DataLoader(dataset=dataset_test, batch_size=VAL_BATCH_SIZE, 
             #                             collate_fn=collate_fn_test, shuffle=False, drop_last=False)
 
+            prev_test_df = current_test.copy()
+
             '''Labels for verification'''
-            d_test, user_id_to_idx = get_feats_train(current_test_df)
-            dataset_test = Riiid(d=d_test)
-            test_dataloader = DataLoader(dataset=dataset_test, batch_size=VAL_BATCH_SIZE, 
-                                        collate_fn=collate_fn, shuffle=False, drop_last=False)
+            current_test = preprocess(current_test, df_questions)
+            d_test, user_id_to_idx_test = get_feats_val(current_test, max_seq=MAX_SEQ)
+            d_test = update_users(d, d_test, user_id_to_idx_train, user_id_to_idx_test, test_flag=True)
+            dataset_test = RiiidVal(d=d_test)
+            test_loader = DataLoader(dataset=dataset_test, 
+                                        batch_size=TEST_BATCH_SIZE, 
+                                        collate_fn=collate_fn_val, shuffle=False, drop_last=False)
 
             # the problem with current feature gen is that 
             # using groupby user_id sorts the user_id and makes it different from the 
@@ -187,8 +178,8 @@ if __name__ == "__main__":
 
             output_all = []
             labels_all = []
-            for _, batch in enumerate(test_dataloader):
-                content_id, _, part_id, prior_question_elapsed_time, mask, labels = batch
+            for _, batch in enumerate(test_loader):
+                content_id, _, part_id, prior_question_elapsed_time, mask, labels, pred_mask = batch
                 target_id = batch[1].to(device).long()
 
                 content_id = Variable(content_id.cuda())
@@ -197,9 +188,9 @@ if __name__ == "__main__":
                 mask = Variable(mask.cuda())
 
                 with torch.no_grad():
-                    output = model(content_id, part_id, prior_question_elapsed_time, mask)
+                    output = model(content_id, part_id, prior_question_elapsed_time, mask_padding= mask)
 
-                pred_probs = torch.softmax(output[~mask], dim=1)
+                pred_probs = torch.softmax(output[pred_mask], dim=1)
                 output_all.extend(pred_probs[:,1].reshape(-1).data.cpu().numpy())
                 labels_all.extend(labels[~mask].reshape(-1).data.numpy())
             '''prediction code ends'''
@@ -208,8 +199,8 @@ if __name__ == "__main__":
             set_predict(current_test.loc[:,['row_id', 'answered_correctly']])
             pbar.update(len(current_test))
 
-    y_true = test_df[test_df.content_type_id == 0].answered_correctly
-    y_pred = pd.concat(predicted).answered_correctly
+    y_true = test_df[test_df.content_type_id == 0]['answered_correctly']
+    y_pred = pd.concat(predicted)['answered_correctly']
     print('\nValidation auc:', roc_auc_score(y_true, y_pred))
     print('# iterations:', len(predicted))
 
