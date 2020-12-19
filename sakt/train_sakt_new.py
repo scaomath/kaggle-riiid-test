@@ -72,7 +72,9 @@ Later epoch does not perform well
 
 - Testing a warm-up scheduler with 10 warm-up epochs for a model with two attention layers (no significant improvement CV 7570)
 
-- To-do: test label smoothing
+- Tried a multi embedding 0.7563 best, then deteriorate
+
+- Test label smoothing using (a) a simple label change, then multiply a factor to the prediction, (b) using a multitarget with the second target being the LGBM prediction
 
 '''
 
@@ -152,8 +154,8 @@ elif PREPROCESS == 2:
     valid_df = pd.read_parquet(DATA_DIR+'cv3_valid.parquet')
     train_df = train_df[TRAIN_COLS_NEW]
     valid_df = valid_df[TRAIN_COLS_NEW]
-    train_group = preprocess_sakt(train_df)
-    valid_group = preprocess_sakt(valid_df)
+    train_group = preprocess_sakt(train_df, label_smoothing=True)
+    valid_group = preprocess_sakt(valid_df, train_flag=2, label_smoothing=False)
     print(f"Prcocessed train.parquet in {time()-start} seconds.\n\n")
 else:
     print("\n\nLoading preprocessed file...")
@@ -202,7 +204,7 @@ optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 # scheduler = ReduceLROnPlateau(optimizer, 'min', patience=conf.PATIENCE-1, threshold=1e-4,verbose=1)
 # scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, eta_min=LEARNING_RATE*1e-2,verbose=1)
 # scheduler = WarmupCosineSchedule(optimizer, warmup_steps=10, t_total=EPOCHS)
-scheduler = WarmupCosineWithHardRestartsSchedule(optimizer, warmup_steps=10, t_total=EPOCHS, cycles=2)
+# scheduler = WarmupCosineWithHardRestartsSchedule(optimizer, warmup_steps=10, t_total=EPOCHS, cycles=2)
 # scheduler = CyclicLR(optimizer, base_lr=1e-1*LEARNING_RATE, max_lr=LEARNING_RATE, step_size_up=5,mode="triangular2", verbose=1)
 # optimizer = HNAGOptimizer(model.parameters(), lr=1e-3) 
 criterion = nn.BCEWithLogitsLoss()

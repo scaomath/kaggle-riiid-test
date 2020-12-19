@@ -16,12 +16,13 @@ from sakt import *
 from utils import *
 from iter_env import *
 
+NUM_SKILLS = 13523
 PRIVATE = False
 DEBUG = False
-LAST_N = 100
 VAL_BATCH_SIZE = 4096
+SIMU_PRI_SIZE = 250_000
 SIMU_PUB_SIZE = 25_000
-MAX_SEQ = 100
+
 
 if DEBUG:
     test_df = pd.read_parquet(DATA_DIR+'cv2_valid.parquet')
@@ -29,43 +30,70 @@ if DEBUG:
 
 #%%
 # if __name__ == "__main__":
+print("\nLoading private simulated test set...")
 if PRIVATE:
-    test_df = pd.read_pickle(DATA_DIR+'cv2_valid.pickle')
+    test_df = pd.read_parquet(DATA_DIR+'cv3_valid.parquet')
+    test_df = test_df[:SIMU_PRI_SIZE]
 else:
     test_df = pd.read_parquet(DATA_DIR+'test_pub_simu.parquet')
+    test_df = test_df[:SIMU_PUB_SIZE]
+print("Loaded test .")
+print("\nLoading train for inference...")
+train_df = pd.read_parquet(DATA_DIR+'cv3_train.parquet')
+print("Loaded train.")
 
-
-train_df = pd.read_parquet(DATA_DIR+'cv2_train.parquet')
 train_df = train_df[TRAIN_DTYPES.keys()]
 train_df = train_df[train_df[CONTENT_TYPE_ID] == False].reset_index(drop = True)
 train_group = train_df[[USER_ID, CONTENT_ID, TARGET]].groupby(USER_ID)\
     .apply(lambda r: (r[CONTENT_ID].values, r[TARGET].values))
 
 example_test = pd.read_csv(DATA_DIR+'example_test.csv')
-
 df_questions = pd.read_csv(DATA_DIR+'questions.csv')
-
-iter_test = Iter_Valid(test_df, max_user=1000)
-
-predicted = []
-def set_predict(df):
-    predicted.append(df)
 
 #%%
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f'\n\nUsing device: {device}')
 # model_file = find_sakt_model()
 # model_file = '/home/scao/Documents/kaggle-riiid-test/model/sakt_head_10_embed_160_auc_0.7499.pt'
-model_file = '/home/scao/Documents/kaggle-riiid-test/model/sakt_head_8_embed_256_seq_150_auc_0.7577.pt'
-tmp = model_file.split('_')
-structure = {'n_skills': 13523, 'n_embed': int(tmp[4]), 'n_head':int(tmp[2])}
+# model_file = '/home/scao/Documents/kaggle-riiid-test/model/sakt_layer_2_head_8_embed_256_seq_150_auc_0.7577.pt'
+# model_file = '/home/scao/Documents/kaggle-riiid-test/model/sakt_layer_1_head_8_embed_128_seq_150_auc_0.7604.pt'
+
+# model_file = '/home/scao/Documents/kaggle-riiid-test/model/sakt_head_8_embed_128_seq_150_auc_0.7584.pt'
+# model_file = '/home/scao/Documents/kaggle-riiid-test/model/sakt_scaled_layer_1_head_8_embed_128_seq_150_auc_0.7603.pt'
+model_file = '/home/scao/Documents/kaggle-riiid-test/model/sakt_layer_1_head_8_embed_128_seq_150_auc_0.7605.pt'
+
+# tmp = model_file.split('_')
+# structure = {'n_skills': 13523, 'n_embed': int(tmp[4]), 'n_head':int(tmp[2])}
 model_name = model_file.split('/')[-1]
+
 print(f'\nLoading {model_name}...\n')
-model, conf = load_sakt_model(model_file)
-print(f'\nLoaded {model_name}.\n')
+# model, conf = load_sakt_model(model_file)
+# conf_print = [(param, val) for (param, val) in conf.items()]
+# print(f'\nLoaded {model_name} \n with {conf}')
+
+MAX_SEQ = 150
+NUM_EMBED = 128
+NUM_HEADS = 8
+SCALING = 1
+NUM_LAYERS = 1
+model = SAKTModel(n_skill=NUM_SKILLS, 
+                max_seq=MAX_SEQ, 
+                embed_dim=NUM_EMBED, 
+                num_heads=NUM_HEADS,
+                num_layers=NUM_LAYERS)
+        
+model = model.to(device)
+model.load_state_dict(torch.load(model_file, map_location=device))
+
 model.eval()
 
 #%%
+iter_test = Iter_Valid(test_df, max_user=1000)
+
+predicted = []
+def set_predict(df):
+    predicted.append(df)
+
 len_test = len(test_df)
 with tqdm(total=len_test) as pbar:
     prev_test_df = None
@@ -102,7 +130,7 @@ with tqdm(total=len_test) as pbar:
         current_test = current_test[current_test[CONTENT_TYPE_ID] == 0]
         
         '''prediction code here'''
-        test_dataset = TestDataset(train_group, current_test, conf['n_skill'])
+        test_dataset = TestDataset(train_group, current_test, NUM_SKILLS)
         test_dataloader = DataLoader(test_dataset, batch_size=VAL_BATCH_SIZE, 
                                     shuffle=False, drop_last=False)
 
@@ -114,7 +142,7 @@ with tqdm(total=len_test) as pbar:
             with torch.no_grad():
                 output, _ = model(x, target_id)
 
-            pred_probs = torch.sigmoid(output[:, -1])
+            pred_probs = torch.sigmoid(SCALING*output[:, -1])
             output_all.extend(pred_probs.reshape(-1).data.cpu().numpy())
         '''prediction code ends'''
 
@@ -125,7 +153,7 @@ with tqdm(total=len_test) as pbar:
 
 y_true = test_df[test_df.content_type_id == 0].answered_correctly
 y_pred = pd.concat(predicted).answered_correctly
-print('\nValidation auc:', roc_auc_score(y_true, y_pred))
+print(f'\nValidation auc with scaling {SCALING}:', roc_auc_score(y_true, y_pred))
 print('# iterations:', len(predicted))
 
 

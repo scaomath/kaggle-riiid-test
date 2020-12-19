@@ -8,6 +8,8 @@ from matplotlib import pyplot as plt
 import random
 from sklearn.metrics import roc_auc_score
 import gc
+import pickle
+import zipfile
 HOME = "/home/scao/Documents/kaggle-riiid-test/"
 sys.path.append(HOME) 
 from utils import *
@@ -340,120 +342,175 @@ categorical_columns= [
 # %%
 flag_lgbm=True
 clfs = list()
-params = {
-            'num_leaves': 350,
-            'max_bin':700,
-            'min_child_weight': 0.03454472573214212,
-            'feature_fraction': 0.58,
-            'bagging_fraction': 0.58,
-            #'min_data_in_leaf': 106,
-            'objective': 'binary',
-            'max_depth': -1,
-            'learning_rate': 0.05,
-            "boosting_type": "gbdt",
-            "bagging_seed": 802,
-            "metric": 'auc',
-            "verbosity": -1,
-            'reg_alpha': 0.3899927210061127,
-            'reg_lambda': 0.6485237330340494,
-            'random_state': 1127
-         }
+
 
 trains=list()
 valids=list()
 
 N_FOLD=1
+# for i in range(N_FOLD):
+#train_df=train_df.reset_index(drop=True)
+train_df_clf=train_df.sample(n=20_000_000)
+print('sample end')
+#train_df.drop(train_df_clf.index, inplace=True)
+#print('train_df drop end')
 
-for i in range(0,N_FOLD):
-  
-    #train_df=train_df.reset_index(drop=True)
-    train_df_clf=train_df.sample(n=1200*10000)
-    print('sample end')
-    #train_df.drop(train_df_clf.index, inplace=True)
-    #print('train_df drop end')
-    
-   
-    del train_df
-    
-    users=train_df_clf['user_id'].drop_duplicates()#去重
-    
-    users=users.sample(frac=0.025)
-    users_df=pd.DataFrame()
-    users_df['user_id']=users.values
-  
-  
-    valid_df_newuser = pd.merge(train_df_clf, users_df, on=['user_id'], how='inner',right_index=True)
-    del users_df
-    del users
-    gc.collect()
-    #
-    train_df_clf.drop(valid_df_newuser.index, inplace=True)
-   
-    #-----------
-    #train_df_clf=train_df_clf.sample(frac=0.2)
-    #train_df_clf.drop(valid_df_newuser.index, inplace=True)
-    train_df_clf = pd.merge(train_df_clf, questions_df, on='content_id', how='left',right_index=True)#
-    valid_df_newuser = pd.merge(valid_df_newuser, questions_df, on='content_id', how='left',right_index=True)#
-    
+
+del train_df
+gc.collect()
+
+users=train_df_clf['user_id'].drop_duplicates()
+
+users=users.sample(frac=0.02)
+users_df=pd.DataFrame()
+users_df['user_id']=users.values
+
+
+valid_df_newuser = pd.merge(train_df_clf, users_df, on=['user_id'], how='inner',right_index=True)
+del users_df
+del users
+gc.collect()
+#
+train_df_clf.drop(valid_df_newuser.index, inplace=True)
+
+#-----------
+#train_df_clf=train_df_clf.sample(frac=0.2)
+#train_df_clf.drop(valid_df_newuser.index, inplace=True)
+train_df_clf = pd.merge(train_df_clf, questions_df, on='content_id', how='left',right_index=True)#
+valid_df_newuser = pd.merge(valid_df_newuser, questions_df, on='content_id', how='left',right_index=True)#
+
 #     train_df_clf = pd.merge(train_df_clf, user_lecture_stats_part, on='user_id', how="left",right_index=True)
 #     valid_df_newuser = pd.merge(valid_df_newuser, user_lecture_stats_part, on='user_id', how="left",right_index=True)
 
-    valid_df=train_df_clf.sample(frac=0.15)
-    train_df_clf.drop(valid_df.index, inplace=True)
-   
-    valid_df = valid_df.append(valid_df_newuser)
-    del valid_df_newuser
-    gc.collect()
-    #
+valid_df=train_df_clf.sample(frac=0.1)
+train_df_clf.drop(valid_df.index, inplace=True)
 
-    trains.append(train_df_clf)
-    valids.append(valid_df)
-    print('valid_df length：',len(valid_df))
-    #train_df=train_df.reset_index(drop=True)
-
-
-#%%
-#del train_df
-del train_df, valid_df
+valid_df = valid_df.append(valid_df_newuser)
+del valid_df_newuser
 gc.collect()
+#
+
+print('train_df length：',len(train_df_clf))
+print('valid_df length：',len(valid_df))
+trains.append(train_df_clf)
+valids.append(valid_df)
+
+del valid_df
+gc.collect()
+    #train_df=train_df.reset_index(drop=True)
 # %%
 # assert len(trains) <= N_FOLD
-for i in range(N_FOLD):
+i = 0
+tr_data = lgb.Dataset(trains[i][features], label=trains[i][target])
+va_data = lgb.Dataset(valids[i][features], label=valids[i][target])
 
-    tr_data = lgb.Dataset(trains[i][features], label=trains[i][target])
-    va_data = lgb.Dataset(valids[i][features], label=valids[i][target])
-    
 #     del train_df_clf
 #     del valid_df
 #     gc.collect()
-    del trains
-    del valids
-    gc.collect()
 
-    model = lgb.train(
-        params, 
-        tr_data,
+# del trains
+# del valids
+# gc.collect()
+
+#%%
+
+params = {
+            'num_leaves': 100,
+            'max_bin': 700,
+            'min_child_weight': 0.05,
+            'feature_fraction': 0.7,
+            'bagging_fraction': 0.58,
+            'min_data_in_leaf': 1024,
+            'objective': 'binary',
+            'max_depth': -1,
+            'learning_rate': 0.03,
+            "boosting_type": "gbdt",
+            "bagging_seed": 802,
+            "metric": 'auc',
+            "verbosity": -1,
+            'lambda_l1': 2,
+            'lambda_l2': 0.6,
+            'random_state': 1127
+         }
+
+# params = {'boosting_type': 'gbdt',
+#           'max_depth' : -1,
+#           'objective': 'binary',
+#           'nthread': 3, # Updated from nthread
+#           'num_leaves': 64,
+#           'learning_rate': 0.05,
+#           'max_bin': 512,
+#           'subsample_for_bin': 200,
+#           'subsample': 1,
+#           'subsample_freq': 1,
+#           'colsample_bytree': 0.8,
+#           'reg_alpha': 5,
+#           'reg_lambda': 10,
+#           'min_split_gain': 0.5,
+#           'min_child_weight': 1,
+#           'min_child_samples': 5,
+#           'scale_pos_weight': 1,
+#           'num_class' : 1,
+#           'metric' : 'binary_error'}
+
+model = lgb.train(
+    params, 
+    tr_data,
 #         train_df[features],
 #         train_df[target],
-        num_boost_round=5000,
-        #valid_sets=[(train_df[features],train_df[target]), (valid_df[features],valid_df[target])], 
-        valid_sets=[tr_data, va_data],
-        early_stopping_rounds=80,
-        feature_name=features,
-        categorical_feature=categorical_columns,
-        verbose_eval=50
-    )
-    clfs.append(model)
-    #print('auc:', roc_auc_score(valid_df[target], model.predict(valid_df[features])))
-    #model.save_model(f'model.txt')
-    lgb.plot_importance(model, importance_type='gain')
-    plt.show()
+    num_boost_round=5000,
+    #valid_sets=[(train_df[features],train_df[target]), (valid_df[features],valid_df[target])], 
+    valid_sets=[tr_data, va_data],
+    early_stopping_rounds=80,
+    feature_name=features,
+    categorical_feature=categorical_columns,
+    verbose_eval=50
+)
 
-    del tr_data
-    del va_data
-    gc.collect()
+clfs.append(model)
+
+#%%
+#print('auc:', roc_auc_score(valid_df[target], model.predict(valid_df[features])))
+#model.save_model(f'model.txt')
+lgb.plot_importance(model, importance_type='gain', max_num_features=20)
+plt.show()
+
 #    
 # del trains
 # del valids
 # gc.collect()
+# %%
+val_auc = model.best_score['valid_1']['auc']
+model.save_model(MODEL_DIR+f'lgb_base_auc_{val_auc:.4f}.txt')
+# with open(MODEL_DIR+f'lgb_base_auc_{val_auc:.4f}.pkl', 'wb') as f:
+#     pickle.dump(model, f)
+# load model with pickle to predict
+# with open('model.pkl', 'rb') as fin:
+#     pkl_bst = pickle.load(fin)
+
+
+archive = zipfile.ZipFile(MODEL_DIR+'lgb_base_auc_0.7727.zip', 'r')
+model_txt = archive.read('lgb_base_auc_0.7727.txt')
+# %%
+params = {
+            'num_leaves': 160,
+            'max_bin': 700,
+            'min_child_weight': 0.05,
+            'feature_fraction': 0.7,
+            "bagging_freq": 3,
+            'bagging_fraction': 0.7,
+            'min_data_in_leaf': 1024,
+            'objective': 'binary',
+            'max_depth': -1,
+            'learning_rate': 0.01,
+            "boosting_type": "gbdt",
+            "bagging_seed": 802,
+            "metric": 'auc',
+            "verbosity": -1,
+            'lambda_l1': 2,
+            'lambda_l2': 0.6,
+            'random_state': 1127
+         }
+
+# %%
 # %%

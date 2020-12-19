@@ -68,7 +68,7 @@ NUM_EMBED = 128
 NUM_HEADS = 8
 NUM_SKILLS = 13523 # len(skills)
 NUM_HIDDEN = 128
-NUM_LAYERS = 2
+NUM_LAYERS = 1
 NUM_TIME = 300 # when scaled by 1000 and round, priori question time's unique values
 LEARNING_RATE = 1e-3
 PATIENCE = 8 # overfit patience
@@ -85,13 +85,52 @@ else:
     map_location='cpu'
 
 
-def preprocess_sakt(df,train_flag=1):
+def preprocess(df, train_flag=1, label_smoothing=False, smoothing_factor=0.2, label_sm=None):
     '''
     Train: train_flag=1
     Valid: train_flag=2
     Test: train_flag=0
     '''
-    df = df[df[CONTENT_TYPE_ID] == False].reset_index(drop = True)
+    
+    if label_smoothing:
+        if label_sm is None:
+            df[TARGET] = df[TARGET]*(1-smoothing_factor) + smoothing_factor/2
+        else:
+            df[TARGET] = label_sm
+
+    df = df[df[CONTENT_TYPE_ID] == False].reset_index(drop = True)    
+
+    if train_flag == 1:
+        df = df.sort_values([TIMESTAMP], ascending=True).reset_index(drop = True)
+
+    df = df[df[CONTENT_TYPE_ID] == False]
+    
+    if train_flag:
+        group = df[[USER_ID, CONTENT_ID, TARGET]]\
+            .groupby(USER_ID)\
+            .apply(lambda r: (r[CONTENT_ID].values, 
+                              r[TARGET].values))
+    else:
+        group = df[[USER_ID, CONTENT_ID]]\
+            .groupby(USER_ID)\
+            .apply(lambda r: (r[CONTENT_ID].values))
+    return group
+
+
+def preprocess_sakt(df, train_flag=1, label_smoothing=False, smoothing_factor=0.2, label_sm=None):
+    '''
+    Train: train_flag=1
+    Valid: train_flag=2
+    Test: train_flag=0
+    '''
+    
+    if label_smoothing:
+        if label_sm is None:
+            df[TARGET] = df[TARGET]*(1-smoothing_factor) + smoothing_factor/2
+        else:
+            df[TARGET] = label_sm
+
+    df = df[df[CONTENT_TYPE_ID] == False].reset_index(drop = True)    
 
     if train_flag == 1:
         df = df.sort_values([TIMESTAMP], ascending=True).reset_index(drop = True)
@@ -143,7 +182,8 @@ class SAKTDataset(Dataset):
         seq_len = len(q_)
 
         q = np.zeros(self.max_seq, dtype=int)
-        qa = np.zeros(self.max_seq, dtype=int)
+        # if label smoothing, this needs to be changed to float
+        qa = np.zeros(self.max_seq, dtype=np.float16)
 
         if seq_len >= self.max_seq:
             if random() > 0.1:
@@ -420,8 +460,9 @@ class SAKTModel(nn.Module):
         x = x.permute(1, 0, 2) # att_output: [s_len, bs, embed] => [bs, s_len, embed]
 
         output = self.ffn(x)
-        # x = self.layer_normal(x + output) # original
-        x = self.layer_normal(output) # if nc>=2 get rid of the skip connection
+        
+        x = self.layer_normal(x + output) # original
+        # x = self.layer_normal(output) # if nc>=2 get rid of the skip connection
         x = self.pred(x)
 
         return x.squeeze(-1), att_weight
@@ -630,7 +671,7 @@ def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
 
 def valid_epoch(model, valid_iterator, criterion, device="cuda", conf=None):
     model.eval()
-
+    scaling = 1 if conf is None else conf.SCALING
     valid_loss = []
     num_corrects = 0
     num_total = 0
@@ -647,7 +688,7 @@ def valid_epoch(model, valid_iterator, criterion, device="cuda", conf=None):
         loss = criterion(output, label)
         valid_loss.append(loss.item())
 
-        output = conf.SCALING*output[:, -1] # (BS, 1)
+        output = scaling*output[:, -1] # (BS, 1)
         label = label[:, -1] 
         output = torch.sigmoid(output)
         pred = ( output >= 0.5).long()
@@ -761,7 +802,7 @@ def run_train(model, train_iterator, valid_iterator, optim, criterion, scheduler
     best_epoch = 0
     val_auc = 0.5
 
-    for epoch in range(epochs):
+    for epoch in range(epochs+1):
 
         tqdm.write(f"\n\n")
         model.train()
@@ -790,7 +831,7 @@ def run_train(model, train_iterator, valid_iterator, optim, criterion, scheduler
                 train_loss.append(loss.item())
 
                 output = output[:, -1]
-                label = label[:, -1] 
+                label = (label[:, -1] > 0.5).long() 
                 output = torch.sigmoid(output)
                 pred = (output >= 0.5).long()
                 
@@ -836,7 +877,11 @@ def run_train(model, train_iterator, valid_iterator, optim, criterion, scheduler
             best_epoch = epoch
             over_fit = 0
             if val_auc > conf.SAVING_THRESHOLD:
-                model_name = f"{model.__name__}_head_{conf.NUM_HEADS}_embed_{conf.NUM_EMBED}_seq_{conf.MAX_SEQ}"
+                model_name = f"{model.__name__}"
+                model_name += f'_layer_{conf.NUM_LAYERS}'
+                model_name += f'_head_{conf.NUM_HEADS}'
+                model_name += f'_embed_{conf.NUM_EMBED}'
+                model_name += f'_seq_{conf.MAX_SEQ}'
                 model_name += f"_auc_{val_auc:.4f}.pt"
                 torch.save(model.state_dict(), os.path.join(MODEL_DIR, model_name))
                 print("Best epoch model saved.\n\n")
@@ -953,18 +998,30 @@ def load_sakt_model(model_file, device='cuda'):
     # creating the model and load the weights
     configs = []
     model_file_lst = model_file.split('_')
-    for c in ['head', 'embed', 'seq']:
-        idx = model_file_lst.index(c) + 1
-        configs.append(int(model_file_lst[idx]))
-
-    # configs.append(int(model_file[model_file.rfind('head')+5]))
-    # configs.append(int(model_file[model_file.rfind('embed')+6:model_file.rfind('embed')+9]))
-    # configs.append(int(model_file[model_file.rfind('seq')+4:model_file.rfind('seq')+7]))
-    conf_dict = dict(n_skill=NUM_SKILLS,
+    try:
+        for c in ['head', 'embed', 'seq', 'layer']:
+            idx = model_file_lst.index(c) + 1
+            configs.append(int(model_file_lst[idx]))
+        conf_dict = dict(n_skill=NUM_SKILLS,
+                     num_heads=configs[0],
+                     embed_dim=configs[1], 
+                     max_seq=configs[2], 
+                     num_layers=configs[3],
+                     )
+    except:
+        for c in ['head', 'embed', 'seq']:
+            idx = model_file_lst.index(c) + 1
+            configs.append(int(model_file_lst[idx]))
+        conf_dict = dict(n_skill=NUM_SKILLS,
                      num_heads=configs[0],
                      embed_dim=configs[1], 
                      max_seq=configs[2], 
                      )
+
+    # configs.append(int(model_file[model_file.rfind('head')+5]))
+    # configs.append(int(model_file[model_file.rfind('embed')+6:model_file.rfind('embed')+9]))
+    # configs.append(int(model_file[model_file.rfind('seq')+4:model_file.rfind('seq')+7]))
+    
 
     if 'saktmulti' in model_file:
         model = SAKTMulti(**conf_dict)
