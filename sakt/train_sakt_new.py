@@ -44,12 +44,6 @@ get_system()
 from sakt import *
 from transformer_optimizers import *
 
-# print('Python     : ' + sys.version.split('\n')[0])
-# print('Numpy      : ' + np.__version__)
-# print('Pandas     : ' + pd.__version__)
-# print('PyTorch    : ' + torch.__version__)
-# DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-# print(f'Device     : {DEVICE}')
 '''
 https://www.kaggle.com/mpware/sakt-fork
 Self-Attentive model for Knowledge Tracing model (SAKT)
@@ -74,38 +68,34 @@ Later epoch does not perform well
 
 - Tried a multi embedding 0.7563 best, then deteriorate
 
-- Test label smoothing using (a) a simple label change, then multiply a factor to the prediction, (b) using a multitarget with the second target being the LGBM prediction
+- (To-do) Test label smoothing using (a) a simple label change, then multiply a factor to the prediction, (b) using a multitarget with the second target being the LGBM prediction
+
+- Multi-embedding, cat 3 outputs from 3 multi-attention, FNN from 3*n_embed to 1*embed, skip connection with the output from the first attention layer. CV 0.7575
+
+- Multi-embedding, cat 2 outputs from 2 multi-attention, FNN from 2*n_embed to 1*embed, skip connection with the output from the first attention layer. CV 
 
 '''
 
 TQDM_INT = 8 
 
-STAGE = "stage1"
-FOLD = 1
-DATE_STR = get_date()
-DEBUG = False
-ROLLOUT = True
-EPOCHS = 60 if ROLLOUT else 13
-LEARNING_RATE = 1e-3
-NROWS_TRAIN = 5_000_000
-PREPROCESS = 2
-TRAIN = True
+
 
 class conf:
     METRIC_ = "max"
     FILLNA_VAL = 14_000 # for prior question elapsed time, rounded average in train
     TQDM_INT = 8
+    SCALING = 1 # scaling before sigmoid
+    LABEL_SMOOTHING = False
     WORKERS = 8 # 0
-    LEARNING_RATE = 1e-3
+    LEARNING_RATE = 4e-4
     BATCH_SIZE = 512
     VAL_BATCH_SIZE = 4096
-    NUM_EMBED = 256
+    NUM_EMBED = 128
     NUM_HEADS = 8
     NUM_LAYERS = 2
     NUM_SKILLS = 13523 # len(skills)
     NUM_TIME = 300 # when scaled by 1000 and round, priori question time's unique values
-    MAX_SEQ = 100
-    SCALING = 1 # scaling before sigmoid
+    MAX_SEQ = 150
     PATIENCE = 8 # overfit patience
     SAVING_THRESHOLD = 0.754 # the threshold for auc to save a model
 
@@ -113,6 +103,15 @@ class conf:
         map_location = lambda storage, loc: storage.cuda()
     else:
         map_location='cpu'
+
+DATE_STR = get_date()
+DEBUG = False
+ROLLOUT = True
+EPOCHS = 80 if ROLLOUT else 13
+LEARNING_RATE =conf.LEARNING_RATE
+NROWS_TRAIN = 5_000_000
+PREPROCESS = 2
+TRAIN = True
 #%%
 if PREPROCESS == 1:
     print("\n\nLoading training csv...")
@@ -154,7 +153,7 @@ elif PREPROCESS == 2:
     valid_df = pd.read_parquet(DATA_DIR+'cv3_valid.parquet')
     train_df = train_df[TRAIN_COLS_NEW]
     valid_df = valid_df[TRAIN_COLS_NEW]
-    train_group = preprocess_sakt(train_df, label_smoothing=True)
+    train_group = preprocess_sakt(train_df, label_smoothing=conf.LABEL_SMOOTHING)
     valid_group = preprocess_sakt(valid_df, train_flag=2, label_smoothing=False)
     print(f"Prcocessed train.parquet in {time()-start} seconds.\n\n")
 else:
@@ -199,12 +198,12 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = SAKTMulti(n_skill, embed_dim=conf.NUM_EMBED, 
                            num_heads=conf.NUM_HEADS)
 # optimizer = torch.optim.SGD(model.parameters(), lr=1e-3, momentum=0.99, weight_decay=0.005)
-# optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
+optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+# optimizer = optim.AdamW(model.parameters(), lr=LEARNING_RATE)
 # scheduler = ReduceLROnPlateau(optimizer, 'min', patience=conf.PATIENCE-1, threshold=1e-4,verbose=1)
 # scheduler = CosineAnnealingWarmRestarts(optimizer, T_0=10, eta_min=LEARNING_RATE*1e-2,verbose=1)
-# scheduler = WarmupCosineSchedule(optimizer, warmup_steps=10, t_total=EPOCHS)
-# scheduler = WarmupCosineWithHardRestartsSchedule(optimizer, warmup_steps=10, t_total=EPOCHS, cycles=2)
+# scheduler = WarmupCosineSchedule(optimizer, warmup_steps=10, t_total=EPOmCHS)
+scheduler = WarmupCosineWithHardRestartsSchedule(optimizer, warmup_steps=10, t_total=EPOCHS, cycles=2)
 # scheduler = CyclicLR(optimizer, base_lr=1e-1*LEARNING_RATE, max_lr=LEARNING_RATE, step_size_up=5,mode="triangular2", verbose=1)
 # optimizer = HNAGOptimizer(model.parameters(), lr=1e-3) 
 criterion = nn.BCEWithLogitsLoss()

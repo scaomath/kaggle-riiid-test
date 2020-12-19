@@ -542,7 +542,10 @@ class SAKTModelNew(nn.Module):
 
 
 class SAKTMulti(nn.Module):
-    def __init__(self, n_skill, max_seq=MAX_SEQ, embed_dim=NUM_EMBED, num_heads=NUM_HEADS):
+    def __init__(self, n_skill, 
+                       max_seq=MAX_SEQ, 
+                       embed_dim=NUM_EMBED, 
+                       num_heads=NUM_HEADS):
         super(SAKTMulti, self).__init__()
         self.__name__ = 'saktmulti'
         self.n_skill = n_skill
@@ -559,14 +562,15 @@ class SAKTMulti(nn.Module):
 
         self.multi_att1 = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.1)
         self.multi_att2 = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.2)
-        self.multi_att3 = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.4)
+        # self.multi_att3 = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads, dropout=0.2)
 
         self.dropout = nn.Dropout(0.2)
         self.layer_normal = nn.LayerNorm(embed_dim) 
 
-        self.ffn = FFN(3*embed_dim)
-        self.layer_normal1 = nn.LayerNorm(3*embed_dim) 
-        self.fc1 = nn.Linear(3*embed_dim, embed_dim)
+        self.ffn = FFN(2*embed_dim, nc=1)
+        self.layer_normal_ffn = nn.LayerNorm(2*embed_dim)
+        # self.layer_normal_ffn = nn.LayerNorm(embed_dim) 
+        self.fc1 = nn.Linear(2*embed_dim, embed_dim)
         self.fc2 = nn.Linear(embed_dim, 1)
         self.relu = nn.ReLU()
     
@@ -589,39 +593,41 @@ class SAKTMulti(nn.Module):
         x += pos_x
 
         e = self.e_embedding(question_ids)
+
         pq_x = self.pqt_embedding(prior_question_time)
         pa_x = self.pa_embedding(prior_question_explain)
+        pq_x += pa_x
 
         x = x.permute(1, 0, 2) # x: [bs, s_len, embed] => [s_len, bs, embed]
         e = e.permute(1, 0, 2)
         pq_x = pq_x.permute(1, 0, 2)
-        pa_x = pa_x.permute(1, 0, 2)
+        # pa_x = pa_x.permute(1, 0, 2)
 
         att_mask = future_mask(x.size(0)).to(device)
 
         att_output1, att_weight1 = self.multi_att1(e, x, x, attn_mask=att_mask)
         att_output1 = self.layer_normal(att_output1 + e)
+        att_output1 = att_output1.permute(1, 0, 2) # att_output: [s_len, bs, embed] => [bs, s_len, embed]
 
         att_output2, att_weight2 = self.multi_att2(pq_x, x, x, attn_mask=att_mask)
         att_output2 = self.layer_normal(att_output2 + pq_x)
-
-        att_output3, att_weight3 = self.multi_att3(pa_x, x, x, attn_mask=att_mask)
-        att_output3 = self.layer_normal(att_output3 + pa_x)
-
-        att_output1 = att_output1.permute(1, 0, 2) # att_output: [s_len, bs, embed] => [bs, s_len, embed]
         att_output2 = att_output2.permute(1, 0, 2)
-        att_output3 = att_output3.permute(1, 0, 2)
 
-        att_output = torch.cat((att_output1, att_output2, att_output3), dim=2)
+        # att_output3, att_weight3 = self.multi_att3(pa_x, x, x, attn_mask=att_mask)
+        # att_output3 = self.layer_normal(att_output3 + pa_x)
+        # att_output3 = att_output3.permute(1, 0, 2)
+
+        # att_output = torch.cat((att_output1, att_output2, att_output3), dim=2)
+        att_output = torch.cat((att_output1, att_output2), dim=2)
         x = self.ffn(att_output)
-        x = self.dropout(x)
         # x = self.relu(x)
         # x = self.layer_normal1(x) + att_output # config 1: after normalization then residual
-        x = self.layer_normal1(x + att_output) # config 2: first residual then normalization
+        # x = self.layer_normal_ffn(x + att_output1) # config 2: first residual then normalization
+        x = self.layer_normal_ffn(x + att_output) # config 2: first residual then normalization
         x = self.fc1(x)
         x = self.fc2(x)
 
-        return x.squeeze(-1), [att_weight1, att_weight2, att_weight3]
+        return x.squeeze(-1), [att_weight1]
 
 def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
     model.train()
@@ -842,7 +848,7 @@ def run_train(model, train_iterator, valid_iterator, optim, criterion, scheduler
                 outs.extend(output.view(-1).data.cpu().numpy())
 
                 if idx % TQDM_INT == 0:
-                    descr = f'[Epoch {epoch}/{epochs}]:  train loss - {train_loss[-1]:.6f}   '
+                    descr = f'[Epoch {epoch}/{epochs}]:  batch train loss - {train_loss[-1]:.6f}   '
                     descr += f"best val auc - {auc_max:.6f} at epoch {best_epoch}"
                     pbar.set_description(descr)
                     pbar.update(TQDM_INT)
@@ -945,7 +951,7 @@ def run_train_new(model, train_iterator, valid_iterator, optim, criterion,
                 outs.extend(output.view(-1).data.cpu().numpy())
 
                 if idx % TQDM_INT == 0:
-                    descr = f'[Epoch {epoch}/{epochs}]:  train loss - {train_loss[-1]:.6f}   '
+                    descr = f'[Epoch {epoch}/{epochs}]:  batch train loss - {train_loss[-1]:.6f}   '
                     descr += f"best val auc - {auc_max:.6f} at epoch {best_epoch}"
                     pbar.set_description(descr)
                     pbar.update(TQDM_INT)
