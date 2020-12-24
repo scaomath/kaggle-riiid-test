@@ -2,9 +2,6 @@
 	"folders": [
 		{
 			"path": "."
-		},
-		{
-			"path": "../openvaccine-covid-19"
 		}
 	]
 }

@@ -1,4 +1,5 @@
 #%%
+import os
 import numpy as np
 import pandas as pd
 from collections import defaultdict
@@ -10,10 +11,17 @@ from sklearn.metrics import roc_auc_score
 import gc
 import pickle
 import zipfile
-HOME = "/home/scao/Documents/kaggle-riiid-test/"
+# HOME = "/home/scao/Documents/kaggle-riiid-test/"
+HOME = os.path.abspath(os.path.join(os.path.dirname(__file__),".."))
 sys.path.append(HOME) 
 from utils import *
 get_system()
+
+pd.set_option('display.max_rows', 150)
+pd.set_option('display.max_columns', 50)
+pd.set_option('display.width', 10)
+pd.set_option('display.expand_frame_repr',False)
+pd.set_option('max_colwidth', 20)
 # %%
 
 '''
@@ -45,12 +53,18 @@ TRAIN_DTYPES = {
     PRIOR_QUESTION_EXPLAIN: 'bool'
 }
 
-MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
-DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
+NROWS_TRAIN = 5_000_000
+# MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
+# DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
+
+MODEL_DIR = HOME+'/model/'
+DATA_DIR = HOME+'/data/'
 # %%
 train_df = dt.fread(DATA_DIR+'train.csv', 
                     columns=set(TRAIN_DTYPES.keys())).to_pandas()
-
+#%%
+train_df = train_df[:NROWS_TRAIN]
+gc.collect()
 # %%
 lectures_df = pd.read_csv(DATA_DIR+'lectures.csv')
 lectures_df['type_of'] = lectures_df['type_of'].replace('solving question', 'solving_question')
@@ -94,12 +108,12 @@ train_lectures[train_lectures.user_id==5382]
 user_lecture_stats_part[user_lecture_stats_part.user_id==5382]
 # %%
 user_lecture_agg = train_df.groupby('user_id')['content_type_id'].agg(['sum', 'count'])
-user_lecture_agg=user_lecture_agg.astype('int16')
+user_lecture_agg = user_lecture_agg.astype('int16')
 user_lecture_stats_part.tail()
 # %%
 #1= if the event was the user watching a lecture.
 cum = train_df.groupby('user_id')['content_type_id'].agg(['cumsum', 'cumcount'])
-cum['cumcount']=cum['cumcount']+1
+cum['cumcount'] = cum['cumcount']+1
 train_df['user_interaction_count'] = cum['cumcount'] 
 train_df['user_interaction_timestamp_mean'] = train_df['timestamp']/cum['cumcount'] 
 train_df['user_lecture_sum'] = cum['cumsum'] 
@@ -114,7 +128,7 @@ train_df.user_interaction_timestamp_mean=train_df.user_interaction_timestamp_mea
 train_df['prior_question_had_explanation'].fillna(False, inplace=True)
 train_df = train_df.astype(TRAIN_DTYPES)
 train_df = train_df[train_df[target] != -1].reset_index(drop=True)
-#%% Whether the content was explained
+#%% Whether the content was explained (unused)
 content_explation_agg=train_df[["content_id","prior_question_had_explanation",target]].groupby(["content_id","prior_question_had_explanation"])[target].agg(['mean'])
 content_explation_agg=content_explation_agg.unstack()
 
@@ -134,7 +148,7 @@ attempt_no_agg=train_df.groupby(["user_id","content_id"])["attempt_no"].agg(['su
 train_df["attempt_no"] = train_df[["user_id","content_id",'attempt_no']].groupby(["user_id","content_id"])["attempt_no"].cumsum()
 attempt_no_agg=attempt_no_agg[attempt_no_agg['sum'] >1]
 
-# %% timestamp
+# %% timestamp the maximum timestamp of every user
 prior_question_elapsed_time_mean=train_df['prior_question_elapsed_time'].mean()
 train_df['prior_question_elapsed_time'].fillna(prior_question_elapsed_time_mean, inplace=True)
 
@@ -142,10 +156,10 @@ max_timestamp_u = train_df[['user_id','timestamp']].groupby(['user_id']).agg(['m
 max_timestamp_u.columns = ['user_id', 'max_time_stamp']
 max_timestamp_u.user_id=max_timestamp_u.user_id.astype('int32')
 
-# %%
+# %% lagtime is the difference in timestamp
 train_df['lagtime'] = train_df.groupby('user_id')['timestamp'].shift()
 
-max_timestamp_u2 = train_df[['user_id','lagtime']].groupby(['user_id']).agg(['max']).reset_index()
+max_timestamp_u2 = train_df[['user_id','lagtime']].groupby(['user_id']).agg(['max']).reset_index() # same with max_timestamp_u
 max_timestamp_u2.columns = ['user_id', 'max_time_stamp2']
 max_timestamp_u2.user_id=max_timestamp_u2.user_id.astype('int32')
 
@@ -156,11 +170,11 @@ train_df['lagtime'].fillna(lagtime_mean, inplace=True)
 train_df['lagtime']=train_df['lagtime']/(1000*3600)
 train_df.lagtime=train_df.lagtime.astype('float32')
 
-# lagtime_agg = train_df.groupby('user_id')['lagtime'].agg(['mean'])
-# train_df['lagtime_mean'] = train_df['user_id'].map(lagtime_agg['mean'])
-# train_df.lagtime_mean=train_df.lagtime_mean.astype('int32')
+lagtime_agg = train_df.groupby('user_id')['lagtime'].agg(['mean'])
+train_df['lagtime_mean'] = train_df['user_id'].map(lagtime_agg['mean'])
+train_df.lagtime_mean=train_df.lagtime_mean.astype('int32')
 # lagtime_agg=lagtime_agg.astype('int32')
-# %%
+# %% lagtime2 is the difference in timestamp with 2 steps
 train_df['lagtime2'] = train_df.groupby('user_id')['timestamp'].shift(2)
 
 max_timestamp_u3 = train_df[['user_id','lagtime2']].groupby(['user_id']).agg(['max']).reset_index()
@@ -191,7 +205,7 @@ train_df.lagtime3=train_df.lagtime3.astype('float32')
 train_df['timestamp']=train_df['timestamp']/(1000*3600)
 train_df.timestamp=train_df.timestamp.astype('float16')
 
-# %%
+# %% user_prior_question_elapsed_time unused
 user_prior_question_elapsed_time = train_df[['user_id','prior_question_elapsed_time']].groupby(['user_id']).tail(1)
 user_prior_question_elapsed_time.columns = ['user_id', 'prior_question_elapsed_time']
 
@@ -205,6 +219,8 @@ train_df.delta_prior_question_elapsed_time=train_df.delta_prior_question_elapsed
 lag_shift = 1 # is 2 in previous version, shift function default is 1
 train_df['lag'] = train_df.groupby('user_id')[target].shift(lag_shift)
 
+# cumsum of the lag is essentially the total number of correct answers
+# before answering the current row
 cum = train_df.groupby('user_id')['lag'].agg(['cumsum', 'cumcount'])
 ##cum['cumcount']=cum['cumcount']+1
 user_agg = train_df.groupby('user_id')['lag'].agg(['sum', 'count']).astype('int16')
@@ -215,7 +231,7 @@ train_df['user_correct_count'] = cum['cumsum']
 train_df['user_uncorrect_count'] = cum['cumcount']-cum['cumsum']
 #train_df['user_answer_count'] = cum['cumcount']
 train_df.drop(columns=['lag'], inplace=True)
-train_df['user_correctness'].fillna(0.67, inplace=True)
+train_df['user_correctness'].fillna(0.67, inplace=True) # average
 train_df.user_correctness=train_df.user_correctness.astype('float16')
 train_df.user_correct_count=train_df.user_correct_count.astype('int16')
 train_df.user_uncorrect_count=train_df.user_uncorrect_count.astype('int16')
@@ -224,7 +240,7 @@ train_df.user_uncorrect_count=train_df.user_uncorrect_count.astype('int16')
 #%%
 del cum
 gc.collect()
-# %%
+# %% explanation_agg is not used
 train_df.prior_question_had_explanation=train_df.prior_question_had_explanation.astype('int8')
 explanation_agg = train_df.groupby('user_id')['prior_question_had_explanation'].agg(['sum', 'count'])
 explanation_agg=explanation_agg.astype('int16')
@@ -246,7 +262,8 @@ train_df.explanation_false_count=train_df.explanation_false_count.astype('int16'
 #%%
 del cum
 gc.collect()
-# %%
+# %% question_id features
+# total correct, total for questions and bundles
 content_agg = train_df.groupby('content_id')[target].agg(['sum', 'count','var'])
 task_container_agg = train_df.groupby('task_container_id')[target].agg(['sum', 'count','var'])
 content_agg=content_agg.astype('float32')
@@ -259,7 +276,7 @@ train_df['task_container_correctness'] = train_df['task_container_id'].map(task_
 train_df.task_container_correctness=train_df.task_container_correctness.astype('float16')
 
 #train_df.drop(columns=['prior_question_had_explanation'], inplace=True)
-# %%
+# %% these two are not used (neither useful)
 content_elapsed_time_agg=train_df.groupby('content_id')['prior_question_elapsed_time'].agg(['mean'])
 content_had_explanation_agg=train_df.groupby('content_id')['prior_question_had_explanation'].agg(['mean'])
 
@@ -298,13 +315,14 @@ questions_df.part_correctness_std=questions_df.part_correctness_std.astype('floa
 bundle_agg = questions_df.groupby('bundle_id')['content_correctness'].agg(['mean'])
 questions_df['bundle_correctness'] = questions_df['bundle_id'].map(bundle_agg['mean'])
 questions_df.bundle_correctness=questions_df.bundle_correctness.astype('float16')
-# %%
+# %% this is only for tag number 1, how about adding later tags
 tags1_agg = questions_df.groupby('tags1')['content_correctness'].agg(['mean', 'var'])
 questions_df['tags1_correctness_mean'] = questions_df['tags1'].map(tags1_agg['mean'])
 questions_df['tags1_correctness_std'] = questions_df['tags1'].map(tags1_agg['var'])
 questions_df.tags1_correctness_mean=questions_df.tags1_correctness_mean.astype('float16')
 questions_df.tags1_correctness_std=questions_df.tags1_correctness_std.astype('float16')
-# %%
+# %% 
+# bundle_correctness and content_correctness are two same columns
 questions_df.drop(columns=['content_correctness'], inplace=True)
 # %%
 print(questions_df.dtypes)
@@ -312,63 +330,104 @@ del bundle_agg
 del part_agg
 del tags1_agg
 gc.collect()
-# %%
+# %% un-necessary for only 5m rows
 train_df['user_correctness'].fillna(1, inplace=True)
 train_df['attempt_no'].fillna(1, inplace=True)
-#
 train_df.fillna(0, inplace=True)
-# %%
-features = [
-    #'user_id',
-    'timestamp',
-    'lagtime',
-    'lagtime_mean',
-    'content_id',
-    'task_container_id',
-    'user_lecture_cumsum',
-    'user_lecture_lv',
-    'prior_question_elapsed_time',
-    'delta_prior_question_elapsed_time',
-    'user_correctness',
-    'user_correct_cumcount',
-    'user_correct_cumsum',
-    'content_correctness',
-    'content_correctness_std',
-    'content_count',
-    'content_sum',
-    'task_container_correctness',
-    'task_container_std',
-    'task_container_sum',
-    'bundle_correctness',
-    'attempt_no',
-    'part',
-    'part_correctness_mean',
-    'part_correctness_std',
-    'tags1',
-    'tags1_correctness_mean',
-    'tags1_correctness_std',
-    'tags2',
-    'tags3',
-    'tags4',
-    'tags5',
-    'tags6',
-    'bundle_id',
-    'part_bundle_id',
-    'explanation_mean', 
-    'explanation_cumsum',
-    'prior_question_had_explanation',
-#     'part_1',
-#     'part_2',
-#     'part_3',
-#     'part_4',
-#     'part_5',
-#     'part_6',
-#     'part_7',
-#     'type_of_concept',
-#     'type_of_intention',
-#     'type_of_solving_question',
-#     'type_of_starter'
-]
+# %% bundle id and content id is the same
+
+features = ['attempt_no',
+ 'bundle_correctness',
+ 'bundle_id',
+ 'content_correctness_std',
+ 'content_count',
+ 'content_id',
+ 'content_sum',
+ 'delta_prior_question_elapsed_time',
+ 'explanation_cumsum',
+ 'explanation_mean',
+ 'explanation_false_count',
+ 'explanation_true_count',
+ 'lagtime',
+ 'lagtime_mean',
+ 'part',
+ 'part_bundle_id',
+ 'part_correctness_mean',
+ 'part_correctness_std',
+ 'prior_question_elapsed_time',
+ 'prior_question_had_explanation',
+ 'tags1',
+ 'tags1_correctness_mean',
+ 'tags1_correctness_std',
+ 'tags2',
+ 'tags3',
+ 'tags4',
+ 'tags5',
+ 'tags6',
+ 'task_container_cor_count',
+ 'task_container_correctness',
+ 'task_container_id',
+ 'task_container_std',
+ 'task_container_sum',
+ 'timestamp',
+ 'user_correct_cumcount',
+ 'user_correct_cumsum',
+ 'user_correctness',
+ 'user_lecture_cumsum',
+ 'user_lecture_lv']
+
+
+# features = [
+#     'timestamp',
+#     'lagtime',
+#     'lagtime_mean',
+#     'content_id',
+#     'task_container_id',
+#     'user_lecture_cumsum',
+#     'user_lecture_lv',
+#     'prior_question_elapsed_time',
+#     'delta_prior_question_elapsed_time',
+#     'user_correctness',
+#     'user_correct_cumcount',
+#     'user_correct_cumsum',
+#     'content_correctness',
+#     'content_correctness_std',
+#     'content_count',
+#     'content_sum',
+#     'task_container_correctness',
+#     'task_container_std',
+#     'task_container_sum',
+#     'bundle_correctness',
+#     'attempt_no',
+#     'part',
+#     'part_correctness_mean',
+#     'part_correctness_std',
+#     'tags1',
+#     'tags1_correctness_mean',
+#     'tags1_correctness_std',
+#     'tags2',
+#     'tags3',
+#     'tags4',
+#     'tags5',
+#     'tags6',
+#     # 'bundle_id',
+#     'part_bundle_id',
+#     'explanation_mean', 
+#     'explanation_true_count',
+#     'explanation_false_count',
+#     'prior_question_had_explanation',
+# #     'part_1',
+# #     'part_2',
+# #     'part_3',
+# #     'part_4',
+# #     'part_5',
+# #     'part_6',
+# #     'part_7',
+# #     'type_of_concept',
+# #     'type_of_intention',
+# #     'type_of_solving_question',
+# #     'type_of_starter'
+# ]
 categorical_columns= [
     #'user_id',
     'content_id',
@@ -380,7 +439,7 @@ categorical_columns= [
     'tags4',
     'tags5',
     'tags6',
-    'bundle_id',
+    # 'bundle_id',
     'part_bundle_id',
     'prior_question_had_explanation',
 #     'part_1',
@@ -403,10 +462,10 @@ clfs = list()
 trains=list()
 valids=list()
 
-N_FOLD=1
+N_FOLD = 1
 # for i in range(N_FOLD):
 #train_df=train_df.reset_index(drop=True)
-train_df_clf=train_df.sample(n=20_000_000)
+train_df_clf=train_df.copy()
 print('sample end')
 #train_df.drop(train_df_clf.index, inplace=True)
 #print('train_df drop end')
@@ -415,6 +474,7 @@ print('sample end')
 del train_df
 gc.collect()
 
+#%%
 users=train_df_clf['user_id'].drop_duplicates()
 
 users=users.sample(frac=0.02)
@@ -422,18 +482,27 @@ users_df=pd.DataFrame()
 users_df['user_id']=users.values
 
 
-valid_df_newuser = pd.merge(train_df_clf, users_df, on=['user_id'], how='inner',right_index=True)
+valid_df_newuser = pd.merge(train_df_clf, users_df, 
+                            on=['user_id'], 
+                            how='inner',
+                            right_index=True)
 del users_df
 del users
 gc.collect()
-#
+#%% 
+# CV strategy is to add some unseen users
+# then just sample train (need to change CV)
 train_df_clf.drop(valid_df_newuser.index, inplace=True)
 
-#-----------
-#train_df_clf=train_df_clf.sample(frac=0.2)
-#train_df_clf.drop(valid_df_newuser.index, inplace=True)
-train_df_clf = pd.merge(train_df_clf, questions_df, on='content_id', how='left',right_index=True)#
-valid_df_newuser = pd.merge(valid_df_newuser, questions_df, on='content_id', how='left',right_index=True)#
+train_df_clf = pd.merge(train_df_clf, questions_df, 
+                        on='content_id', 
+                        how='left',
+                        right_index=True)#
+
+valid_df_newuser = pd.merge(valid_df_newuser, questions_df, 
+                            on='content_id', 
+                            how='left',
+                            right_index=True)#
 
 #     train_df_clf = pd.merge(train_df_clf, user_lecture_stats_part, on='user_id', how="left",right_index=True)
 #     valid_df_newuser = pd.merge(valid_df_newuser, user_lecture_stats_part, on='user_id', how="left",right_index=True)
@@ -444,13 +513,14 @@ train_df_clf.drop(valid_df.index, inplace=True)
 valid_df = valid_df.append(valid_df_newuser)
 del valid_df_newuser
 gc.collect()
-#
+#%%
 
 print('train_df length：',len(train_df_clf))
 print('valid_df length：',len(valid_df))
+print("Number of features: ", len(train_df_clf.columns))
 trains.append(train_df_clf)
 valids.append(valid_df)
-
+#%%
 del valid_df
 gc.collect()
     #train_df=train_df.reset_index(drop=True)

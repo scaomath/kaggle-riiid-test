@@ -14,6 +14,13 @@ HOME = "/home/scao/Documents/kaggle-riiid-test/"
 sys.path.append(HOME) 
 from utils import *
 get_system()
+
+
+pd.set_option('display.max_rows', 150)
+pd.set_option('display.max_columns', 50)
+pd.set_option('display.width', 10)
+pd.set_option('display.expand_frame_repr',False)
+pd.set_option('max_colwidth', 20)
 # %%
 
 '''
@@ -51,12 +58,17 @@ TRAIN_DTYPES = {
     PRIOR_QUESTION_TIME: 'float32', 
     PRIOR_QUESTION_EXPLAIN: 'bool'
 }
+NROWS_TRAIN = 5_000_000
+# MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
+# DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
 
-MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
-DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
+MODEL_DIR = HOME+'/model/'
+DATA_DIR = HOME+'/data/'
 # %%
 train_df = dt.fread(DATA_DIR+'train.csv', columns=set(TRAIN_DTYPES.keys())).to_pandas()
-
+#%%
+train_df = train_df[:NROWS_TRAIN]
+gc.collect()
 # %%
 lectures_df = pd.read_csv(DATA_DIR+'lectures.csv')
 lectures_df['type_of'] = lectures_df['type_of'].replace('solving question', 'solving_question')
@@ -296,7 +308,7 @@ features = [
     'tags4',
     'tags5',
     'tags6',
-    'bundle_id',
+    # 'bundle_id',
     'part_bundle_id',
     'explanation_mean', 
     'explanation_cumsum',
@@ -324,7 +336,7 @@ categorical_columns= [
     'tags4',
     'tags5',
     'tags6',
-    'bundle_id',
+    # 'bundle_id',
     'part_bundle_id',
     'prior_question_had_explanation',
 #     'part_1',
@@ -366,7 +378,10 @@ users_df=pd.DataFrame()
 users_df['user_id']=users.values
 
 
-valid_df_newuser = pd.merge(train_df_clf, users_df, on=['user_id'], how='inner',right_index=True)
+valid_df_newuser = pd.merge(train_df_clf, users_df, 
+                            on=['user_id'], 
+                            how='inner',
+                            right_index=True)
 del users_df
 del users
 gc.collect()
@@ -376,8 +391,14 @@ train_df_clf.drop(valid_df_newuser.index, inplace=True)
 #-----------
 #train_df_clf=train_df_clf.sample(frac=0.2)
 #train_df_clf.drop(valid_df_newuser.index, inplace=True)
-train_df_clf = pd.merge(train_df_clf, questions_df, on='content_id', how='left',right_index=True)#
-valid_df_newuser = pd.merge(valid_df_newuser, questions_df, on='content_id', how='left',right_index=True)#
+train_df_clf = pd.merge(train_df_clf, questions_df, 
+                        on='content_id', 
+                        how='left',
+                        right_index=True)#
+valid_df_newuser = pd.merge(valid_df_newuser, questions_df, 
+                            on='content_id', 
+                            how='left',
+                            right_index=True)#
 
 #     train_df_clf = pd.merge(train_df_clf, user_lecture_stats_part, on='user_id', how="left",right_index=True)
 #     valid_df_newuser = pd.merge(valid_df_newuser, user_lecture_stats_part, on='user_id', how="left",right_index=True)
@@ -416,14 +437,14 @@ va_data = lgb.Dataset(valids[i][features], label=valids[i][target])
 
 params = {
             'num_leaves': 100,
-            'max_bin': 700,
+            'max_bin': 200,
             'min_child_weight': 0.05,
-            'feature_fraction': 0.7,
+            'feature_fraction': 0.6,
             'bagging_fraction': 0.58,
-            'min_data_in_leaf': 1024,
+            'min_data_in_leaf': 512,
             'objective': 'binary',
             'max_depth': -1,
-            'learning_rate': 0.03,
+            'learning_rate': 0.05,
             "boosting_type": "gbdt",
             "bagging_seed": 802,
             "metric": 'auc',
