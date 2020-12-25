@@ -96,7 +96,7 @@ tmp = model_file.split('_')
 structure = {'n_skills': 13523, 'n_embed': int(tmp[4]), 'n_head':int(tmp[2])}
 model_name = model_file.split('/')[-1]
 print(f'\nLoading {model_name}...\n')
-model = load_sakt_model_new(model_file, structure=structure)
+model = load_sakt_model(model_file, structure=structure)
 print(f'\nLoaded {model_name}.\n')
 model.eval()
 

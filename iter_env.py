@@ -1,4 +1,5 @@
 #%%
+import os
 import sys
 import pandas as pd
 import numpy as np
@@ -7,9 +8,11 @@ from sklearn.metrics import roc_auc_score
 import torch
 from utils import *
 
-
-DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
-MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
+HOME = os.path.dirname(os.path.abspath(__file__))
+# DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
+# MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
+MODEL_DIR = HOME+'/model/'
+DATA_DIR = HOME+'/data/'
 PRIVATE = False
 DEBUG = False
 MAX_SEQ = 150

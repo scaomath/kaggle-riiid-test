@@ -105,7 +105,8 @@ def timer(label: str) -> None:
     p = psutil.Process(os.getpid())
     start = time()  # Setup - __enter__
     m0 = p.memory_info()[0] / 2. ** 30
-    print(color(f"{label}: Start at {start}; RAM USAGE AT START {m0}"))
+    print(color(f"{label}: start at {start};"))
+    print(color(f"RAM USAGE AT START: {m0:.2f} GB"))
     try:
         yield  # yield to body of `with` statement
     finally:  # Teardown - __exit__
@@ -114,10 +115,11 @@ def timer(label: str) -> None:
         sign = '+' if delta >= 0 else '-'
         delta = math.fabs(delta)
         end = time()
-        print(color(f"{label}: End at {end} ({end - start} elapsed); RAM USAGE AT END {m1:.2f}GB ({sign}{delta:.2f}GB)", color=Colors.red))
+        print(color(f"{label}:  done at {end} ({end - start:.6f} secs elapsed);", color=Colors.red))
+        print(color(f"RAM USAGE AT END:   {m1:.2f}GB ({sign}{delta:.2f}GB)", color=Colors.red))
 
 @contextmanager
-def trace(title):
+def trace(title: str):
     t0 = time.time()
     p = psutil.Process(os.getpid())
     m0 = p.memory_info()[0] / 2. ** 30

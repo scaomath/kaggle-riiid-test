@@ -88,7 +88,7 @@ class conf:
     LABEL_SMOOTHING = False
     WORKERS = 8 # 0
     LEARNING_RATE = 4e-4
-    BATCH_SIZE = 512
+    BATCH_SIZE = 128
     VAL_BATCH_SIZE = 4096
     NUM_EMBED = 128
     NUM_HEADS = 8

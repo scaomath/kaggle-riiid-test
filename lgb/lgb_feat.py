@@ -10,7 +10,8 @@ from sklearn.metrics import roc_auc_score
 import gc
 import pickle
 import zipfile
-HOME = "/home/scao/Documents/kaggle-riiid-test/"
+# HOME = "/home/scao/Documents/kaggle-riiid-test/"
+HOME = os.path.abspath(os.path.join(os.path.dirname(__file__),".."))
 sys.path.append(HOME) 
 from utils import *
 get_system()
@@ -196,7 +197,19 @@ train_df["attempt_no"] = train_df[["user_id","content_id",'attempt_no']]\
 explanation_agg = train_df.groupby('user_id')['prior_question_had_explanation'].agg(['sum', 'count'])
 explanation_agg=explanation_agg.astype('int16')
 #train_df.drop(columns=['prior_question_had_explanation'], inplace=True)
-# %%
+#%%
+cum = train_df.groupby('user_id')['prior_question_had_explanation'].agg(['cumsum', 'cumcount'])
+cum['cumcount']=cum['cumcount']+1
+train_df['explanation_mean'] = cum['cumsum'] / cum['cumcount']
+train_df['explanation_true_count'] = cum['cumsum'] 
+train_df['explanation_false_count'] =  cum['cumcount']-cum['cumsum']
+#train_df.drop(columns=['lag'], inplace=True)
+
+train_df.explanation_mean=train_df.explanation_mean.astype('float16')
+train_df.explanation_true_count=train_df.explanation_true_count.astype('int16')
+train_df.explanation_false_count=train_df.explanation_false_count.astype('int16')
+
+# %% user_agg is not used
 user_agg = train_df.groupby('user_id')[target].agg(['sum', 'count'])
 content_agg = train_df.groupby('content_id')[target].agg(['sum', 'count','var'])
 task_container_agg = train_df.groupby('task_container_id')[target].agg(['sum', 'count','var'])
@@ -308,10 +321,12 @@ features = [
     'tags4',
     'tags5',
     'tags6',
-    # 'bundle_id',
+    # 'bundle_id', # this is the same with content_id
     'part_bundle_id',
     'explanation_mean', 
     'explanation_cumsum',
+    'explanation_false_count',
+    'explanation_true_count',
     'prior_question_had_explanation',
 #     'part_1',
 #     'part_2',
@@ -362,15 +377,16 @@ valids=list()
 N_FOLD=1
 # for i in range(N_FOLD):
 #train_df=train_df.reset_index(drop=True)
-train_df_clf=train_df.sample(n=20_000_000)
+# train_df_clf=train_df.sample(n=20_000_000)
+train_df_clf=train_df.copy()
 print('sample end')
 #train_df.drop(train_df_clf.index, inplace=True)
 #print('train_df drop end')
 
-
+#%%
 del train_df
 gc.collect()
-
+#%%
 users=train_df_clf['user_id'].drop_duplicates()
 
 users=users.sample(frac=0.02)
@@ -385,7 +401,7 @@ valid_df_newuser = pd.merge(train_df_clf, users_df,
 del users_df
 del users
 gc.collect()
-#
+#%%
 train_df_clf.drop(valid_df_newuser.index, inplace=True)
 
 #-----------
@@ -409,76 +425,58 @@ train_df_clf.drop(valid_df.index, inplace=True)
 valid_df = valid_df.append(valid_df_newuser)
 del valid_df_newuser
 gc.collect()
-#
+#%%
 
 print('train_df length：',len(train_df_clf))
 print('valid_df length：',len(valid_df))
+print("Number of features: ", len(train_df_clf.columns))
 trains.append(train_df_clf)
 valids.append(valid_df)
 
 del valid_df
 gc.collect()
     #train_df=train_df.reset_index(drop=True)
-# %%
+
+#%%
+
 # assert len(trains) <= N_FOLD
 i = 0
 tr_data = lgb.Dataset(trains[i][features], label=trains[i][target])
 va_data = lgb.Dataset(valids[i][features], label=valids[i][target])
-
-#     del train_df_clf
-#     del valid_df
-#     gc.collect()
-
-# del trains
-# del valids
-# gc.collect()
-
-#%%
+# params = {
+#             'num_leaves': 100,
+#             'max_bin': 200,
+#             'min_child_weight': 0.05,
+#             'feature_fraction': 0.6,
+#             'bagging_fraction': 0.58,
+#             'min_data_in_leaf': 512,
+#             'objective': 'binary',
+#             'max_depth': -1,
+#             'learning_rate': 0.05,
+#             "boosting_type": "gbdt",
+#             "bagging_seed": 802,
+#             "metric": 'auc',
+#             "verbosity": -1,
+#             'lambda_l1': 2,
+#             'lambda_l2': 0.6,
+#             'random_state': 1127
+#          }
 
 params = {
-            'num_leaves': 100,
-            'max_bin': 200,
-            'min_child_weight': 0.05,
-            'feature_fraction': 0.6,
-            'bagging_fraction': 0.58,
-            'min_data_in_leaf': 512,
-            'objective': 'binary',
-            'max_depth': -1,
-            'learning_rate': 0.05,
-            "boosting_type": "gbdt",
-            "bagging_seed": 802,
-            "metric": 'auc',
-            "verbosity": -1,
-            'lambda_l1': 2,
-            'lambda_l2': 0.6,
-            'random_state': 1127
-         }
-
-# params = {'boosting_type': 'gbdt',
-#           'max_depth' : -1,
-#           'objective': 'binary',
-#           'nthread': 3, # Updated from nthread
-#           'num_leaves': 64,
-#           'learning_rate': 0.05,
-#           'max_bin': 512,
-#           'subsample_for_bin': 200,
-#           'subsample': 1,
-#           'subsample_freq': 1,
-#           'colsample_bytree': 0.8,
-#           'reg_alpha': 5,
-#           'reg_lambda': 10,
-#           'min_split_gain': 0.5,
-#           'min_child_weight': 1,
-#           'min_child_samples': 5,
-#           'scale_pos_weight': 1,
-#           'num_class' : 1,
-#           'metric' : 'binary_error'}
+        'num_leaves': 300,
+        'max_bin':450,
+        'feature_fraction': 0.5,
+        'bagging_fraction': 0.5,
+        'objective': 'binary',
+        'learning_rate': 0.05,
+        "boosting_type": "gbdt",
+        "metric": 'auc',
+        'random_state': 1127
+}
 
 model = lgb.train(
     params, 
     tr_data,
-#         train_df[features],
-#         train_df[target],
     num_boost_round=5000,
     #valid_sets=[(train_df[features],train_df[target]), (valid_df[features],valid_df[target])], 
     valid_sets=[tr_data, va_data],
@@ -510,8 +508,8 @@ model.save_model(MODEL_DIR+f'lgb_base_auc_{val_auc:.4f}.txt')
 #     pkl_bst = pickle.load(fin)
 
 
-archive = zipfile.ZipFile(MODEL_DIR+'lgb_base_auc_0.7727.zip', 'r')
-model_txt = archive.read('lgb_base_auc_0.7727.txt')
+# archive = zipfile.ZipFile(MODEL_DIR+'lgb_base_auc_0.7727.zip', 'r')
+# model_txt = archive.read('lgb_base_auc_0.7727.txt')
 # %%
 params = {
             'num_leaves': 160,
