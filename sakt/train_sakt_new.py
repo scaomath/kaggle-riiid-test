@@ -52,7 +52,7 @@ an implementation of this paper: https://arxiv.org/pdf/1907.06837.pdf
 
 Version notes:
 
-- Increasing seq_len for sakt new model does not work well
+- Increasing seq_len for sakt new model does not work well (or as intended)
 
 - Testing performance of the following configs for both attention layers and after concat att outputs:
 1. bn(relu(f(x))) + x, epoch 1 auc 0.7372, epoch 3 auc 0.7422, epoch 5 auc 0.7445 
