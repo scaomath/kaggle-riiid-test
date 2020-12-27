@@ -10,7 +10,7 @@ from sklearn.metrics import roc_auc_score
 from torch.autograd import Variable
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader, Dataset
-from torchsummary import summary
+# from torchsummary import summary
 from tqdm import tqdm
 
 HOME =  "/home/scao/Documents/kaggle-riiid-test/"

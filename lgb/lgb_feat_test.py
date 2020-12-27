@@ -31,11 +31,7 @@ pd.set_option('max_colwidth', 20)
 # %%
 
 '''
-New version of LGB feat gen as of Dec 18
-
-1. Baseline (baseline file) running on Dec 24, debugging ver (first 12m rows), CV 0.7759, iter_env CV: 0.7473
-
-
+Version notes: README.md
 
 '''
 
@@ -65,13 +61,13 @@ TRAIN_DTYPES = {
 }
 
 N_FOLD = 1
-NROWS_TRAIN = 12_000_000
+NROWS_TRAIN = 5_000_000
 NROWS_TRAIN_START = 12_000_000
 NROWS_TEST = 25_000
 # MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
 # DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
 DEBUG = True
-TRAIN = True
+TRAIN = False
 # %%
 with timer("Loading train"):
     if DEBUG:
@@ -261,6 +257,8 @@ train_df.user_uncorrect_count=train_df.user_uncorrect_count.astype('int16')
 #%%
 rolling_windows = [3, 6, 10]
 for w in rolling_windows:
+    # because the 'lag' feature has first entry NaN, so without groupby user_id
+    # still yields the correct result
     train_df[f'rolling_{w}_correctness'] = train_df['lag'].rolling(w).sum()
     # rolling_mean = train_df.groupby('user_id')[f'rolling_{w}_correctness'].agg(['mean'])
     train_df[f'rolling_{w}_correctness'] = train_df.groupby(['user_id'], sort=False)[f'rolling_{w}_correctness'].apply(lambda x: x.fillna(x.mean()))
@@ -268,6 +266,22 @@ for w in rolling_windows:
     train_df[f'rolling_{w}_correctness'].fillna(rolling_mean, inplace=True)
     train_df[f'rolling_{w}_correctness'] = train_df[f'rolling_{w}_correctness'].round().astype('int8')
 
+# train_df.loc[train_df.user_id==260752571, ['lag']]
+#%%
+user_rolling_df = pd.DataFrame()
+with timer('Computing rolling'):
+    for w in rolling_windows:
+        user_rolling_df[f"user_rolling_{w}"] = train_df.groupby('user_id')['lag']\
+            .apply(lambda r: (r.fillna(0).astype('int8').values[-w:]))
+user_rolling_df.index.names = ['user_id']
+# user_rolling_df[] = train_df.groupby('user_id')['lag']\
+#     .apply(lambda r: (r.fillna(0).astype('int8').values[-3:]))
+# user_rolling_6 = train_df.groupby('user_id')['lag']\
+#     .apply(lambda r: (r.fillna(0).astype('int8').values[-6:]))
+# user_rolling_10 = train_df.groupby('user_id')['lag']\
+#     .apply(lambda r: (r.fillna(0).astype('int8').values[-10:]))
+
+#%%
 train_df.drop(columns=['lag'], inplace=True)
 #%%
 del cum
@@ -619,6 +633,19 @@ params = {
             'random_state': 1127
          }
 
+params = {
+        'objective': 'binary', 
+        'seed': 1127, 
+        'metric': 'AUC', 
+        'boosting_type': 'gbdt', 
+        'lambda_l1': 0.23, 
+        'lambda_l2': 0.11, 
+        'num_leaves': 206, 'feature_fraction': 0.7, 
+        'bagging_fraction': 0.7, 
+        'bagging_freq': 7, 
+        'min_child_samples': 45
+        }
+
 
 
 
@@ -653,13 +680,17 @@ if TRAIN:
         val_auc = model.best_score['valid_1']['auc']
         model.save_model(MODEL_DIR+f'lgb_base_fold_{i}_auc_{val_auc:.4f}.txt')   
         clfs.append(model)
-else:
-    for _ in range(N_FOLD):
-        model = lgb.Booster(model_file=MODEL_DIR+f'lgb.txt')
-        clfs.append(model)
+    # if TRAIN:
+    del trains, valids, tr_data, va_data
+    gc.collect()
 
-del trains, valids, tr_data, va_data
-gc.collect()
+else:
+    with timer("Loading trained model"):
+        for _ in range(N_FOLD):
+            model = lgb.Booster(model_file=MODEL_DIR+f'lgb_base_fold_0_auc_0.7784.txt')
+            clfs.append(model)
+
+
 #%%
 
 fig,ax = plt.subplots(figsize=(15,15))
@@ -678,8 +709,13 @@ plt.show()
 # model_txt = archive.read('lgb_base_auc_0.7727.txt')
 # %%
 
+# user_agg['sum'] records the previous question answered correct or not
 user_sum_dict = user_agg['sum'].astype('int16').to_dict(defaultdict(int))
+
+# user_agg['count'] records the number of previous interactions
 user_count_dict = user_agg['count'].astype('int16').to_dict(defaultdict(int))
+
+# user_rolling_{w}_dict stores the recent w answer_correctly, w= 3,6,10
 
 task_container_sum_dict = task_container_agg['sum'].astype('int32').to_dict(defaultdict(int))
 task_container_count_dict = task_container_agg['count'].astype('int32').to_dict(defaultdict(int))
@@ -696,8 +732,16 @@ user_lecture_count_dict = user_lecture_agg['count'].astype('int16').to_dict(defa
 #lagtime_mean_dict = lagtime_agg['mean'].astype('int32').to_dict(defaultdict(int))
 #del prior_question_elapsed_time_agg
 
-del user_agg, task_container_agg, explanation_agg, user_lecture_agg, #lagtime_agg
-gc.collect()
+if not DEBUG:
+    del user_agg, task_container_agg, explanation_agg, user_lecture_agg, #lagtime_agg
+    gc.collect()
+
+
+#%%
+with timer('Convert rolling mean for users'):
+    user_rolling_3_dict = user_rolling_df['user_rolling_3'].to_dict(defaultdict(int))
+    user_rolling_6_dict = user_rolling_df['user_rolling_6'].to_dict(defaultdict(int))
+    user_rolling_10_dict = user_rolling_df['user_rolling_10'].to_dict(defaultdict(int))
 # %%
 max_timestamp_u_dict=max_timestamp_u.set_index('user_id').to_dict()
 max_timestamp_u_dict2=max_timestamp_u2.set_index('user_id').to_dict()
@@ -706,10 +750,11 @@ user_prior_question_elapsed_time_dict=user_prior_question_elapsed_time.set_index
 
 attempt_no_sum_dict = attempt_no_agg['sum'].to_dict(defaultdict(int))
 
-#del question_elapsed_time_agg
-del max_timestamp_u, max_timestamp_u2, max_timestamp_u3
-del user_prior_question_elapsed_time, attempt_no_agg
-gc.collect()
+if not DEBUG:
+    #del question_elapsed_time_agg
+    del max_timestamp_u, max_timestamp_u2, max_timestamp_u3
+    del user_prior_question_elapsed_time, attempt_no_agg
+    gc.collect()
 # %%
 
 def get_max_attempt(user_id,content_id):
@@ -736,236 +781,21 @@ def get_max_attempt(user_id,content_id):
 # %%
 valid_df = pd.read_parquet(DATA_DIR+'cv5_valid.parquet')
 valid_df = valid_df[:NROWS_TEST]
+
+
+#%%
 iter_test = Iter_Valid(valid_df, max_user=1000)
 
 predicted = []
 def set_predict(df):
     predicted.append(df)
 
-#%%
-
-len_test = len(valid_df)
 prior_test_df = None
-
-with tqdm(total=len_test) as pbar:
-    for (test_df, sample_prediction_df) in iter_test:    
-        if prior_test_df is not None:
-            prior_test_df[target] = eval(test_df['prior_group_answers_correct'].iloc[0])
-            prior_test_df = prior_test_df[prior_test_df[target] != -1].reset_index(drop=True)
-            #prior_test_df = prior_test_df[prior_test_df[target] != -1]
-            prior_test_df['prior_question_had_explanation'].fillna(False, inplace=True)       
-            prior_test_df.prior_question_had_explanation=prior_test_df.prior_question_had_explanation.astype('int8')
-        
-            user_ids = prior_test_df['user_id'].values
-            #content_ids = prior_test_df['content_id'].values
-            #task_container_ids = prior_test_df['task_container_id'].values
-            #prior_question_had_explanations = prior_test_df['prior_question_had_explanation'].values
-            targets = prior_test_df[target].values        
-            
-            for user_id, answered_correctly in zip(user_ids, targets):
-                user_sum_dict[user_id] += answered_correctly
-                user_count_dict[user_id] += 1
-    #             user_sum_dict2[user_id] += answered_correctly
-    #             user_count_dict2[user_id] += 1   
-                
-
-        prior_test_df = test_df.copy() 
-            
-        
-        question_len = len(test_df[test_df['content_type_id'] == 0])
-        test_df['prior_question_had_explanation'].fillna(False, inplace=True)
-        test_df.prior_question_had_explanation=test_df.prior_question_had_explanation.astype('int8')
-        test_df['prior_question_elapsed_time'].fillna(prior_question_elapsed_time_mean, inplace=True)
-        
-
-        user_lecture_sum = np.zeros(question_len, dtype=np.int16)
-        user_lecture_count = np.zeros(question_len, dtype=np.int16) 
-        
-        user_sum = np.zeros(question_len, dtype=np.int16)
-        user_count = np.zeros(question_len, dtype=np.int16)
-    #     user_sum2 = np.zeros(question_len, dtype=np.int16)
-    #     user_count2 = np.zeros(question_len, dtype=np.int16)
-
-    #     user_sum_dict_test=defaultdict(int)
-    #     user_count_dict_test=defaultdict(int)
-
-        task_container_sum = np.zeros(question_len, dtype=np.int32)
-        task_container_count = np.zeros(question_len, dtype=np.int32)
-        task_container_std = np.zeros(question_len, dtype=np.float16)
-
-        explanation_sum = np.zeros(question_len, dtype=np.int32)
-        explanation_count = np.zeros(question_len, dtype=np.int32)
-        delta_prior_question_elapsed_time = np.zeros(question_len, dtype=np.int32)
-
-        attempt_no_count = np.zeros(question_len, dtype=np.int16)
-        lagtime = np.zeros(question_len, dtype=np.float32)
-        lagtime2 = np.zeros(question_len, dtype=np.float32)
-        lagtime3 = np.zeros(question_len, dtype=np.float32)
-        #lagtime_means = np.zeros(question_len, dtype=np.int32)
-        #
-    
-        i=0
-        for j, (user_id,prior_question_had_explanation,content_type_id,prior_question_elapsed_time,timestamp, content_id,task_container_id) in enumerate(zip(test_df['user_id'].values,test_df['prior_question_had_explanation'].values,test_df['content_type_id'].values,test_df['prior_question_elapsed_time'].values,test_df['timestamp'].values, test_df['content_id'].values, test_df['task_container_id'].values)):   
-            #
-            user_lecture_sum_dict[user_id] += content_type_id
-            user_lecture_count_dict[user_id] += 1
-            if(content_type_id==1):#
-                x=1
-    #             if(len(user_lecture_stats_part[user_lecture_stats_part.user_id==user_id])==0):
-    #                 user_lecture_stats_part = user_lecture_stats_part.append([{'user_id':user_id}], ignore_index=True)
-    #                 user_lecture_stats_part.fillna(0, inplace=True)
-    #                 user_lecture_stats_part.loc[user_lecture_stats_part.user_id==user_id,part_lectures_columns + types_of_lectures_columns]+=lectures_df[lectures_df.lecture_id==content_id][part_lectures_columns + types_of_lectures_columns].values
-    #             else:
-    #                 user_lecture_stats_part.loc[user_lecture_stats_part.user_id==user_id,part_lectures_columns + types_of_lectures_columns]+=lectures_df[lectures_df.lecture_id==content_id][part_lectures_columns + types_of_lectures_columns].values
-            if (content_type_id==0):#   
-                user_lecture_sum[i] = user_lecture_sum_dict[user_id]
-                user_lecture_count[i] = user_lecture_count_dict[user_id]
-                    
-                user_sum[i] = user_sum_dict[user_id]
-                user_count[i] = user_count_dict[user_id]
-    #             user_sum2[i] = user_sum_dict2[user_id]
-    #             user_count2[i] = user_count_dict2[user_id]
-        #         content_sum[i] = content_sum_dict[content_id]
-        #         content_count[i] = content_count_dict[content_id]
-                task_container_sum[i] = task_container_sum_dict[task_container_id]
-                task_container_count[i] = task_container_count_dict[task_container_id]
-                task_container_std[i]=task_container_std_dict[task_container_id]
-
-                explanation_sum_dict[user_id] += prior_question_had_explanation
-                explanation_count_dict[user_id] += 1
-                explanation_sum[i] = explanation_sum_dict[user_id]
-                explanation_count[i] = explanation_count_dict[user_id]
-
-                if user_id in max_timestamp_u_dict['max_time_stamp'].keys():
-                    lagtime[i]=timestamp-max_timestamp_u_dict['max_time_stamp'][user_id]
-                    if(max_timestamp_u_dict2['max_time_stamp2'][user_id]==lagtime_mean2):#
-                        lagtime2[i]=lagtime_mean2
-                        lagtime3[i]=lagtime_mean3
-                        #max_timestamp_u_dict3['max_time_stamp3'].update({user_id:lagtime_mean3})
-                    else:
-                        lagtime2[i]=timestamp-max_timestamp_u_dict2['max_time_stamp2'][user_id]
-                        if(max_timestamp_u_dict3['max_time_stamp3'][user_id]==lagtime_mean3):
-                            lagtime3[i]=lagtime_mean3 #
-                        else:
-                            lagtime3[i]=timestamp-max_timestamp_u_dict3['max_time_stamp3'][user_id]
-                        
-                        max_timestamp_u_dict3['max_time_stamp3'][user_id]=max_timestamp_u_dict2['max_time_stamp2'][user_id]
-                            
-                    max_timestamp_u_dict2['max_time_stamp2'][user_id]=max_timestamp_u_dict['max_time_stamp'][user_id]
-                    max_timestamp_u_dict['max_time_stamp'][user_id]=timestamp
-    #                 lagtime_means[i]=(lagtime_mean_dict[user_id]+lagtime[i])/2
-    #                 lagtime_mean_dict[user_id]=lagtime_means[i]
-                else:
-                    lagtime[i]=lagtime_mean
-                    max_timestamp_u_dict['max_time_stamp'].update({user_id:timestamp})
-                    lagtime2[i]=lagtime_mean2#
-                    max_timestamp_u_dict2['max_time_stamp2'].update({user_id:lagtime_mean2})
-                    lagtime3[i]=lagtime_mean3#
-                    max_timestamp_u_dict3['max_time_stamp3'].update({user_id:lagtime_mean3})
-    #                 lagtime_mean_dict.update({user_id:lagtime_mean})
-    #                 lagtime_means[i]=(lagtime_mean_dict[user_id]+lagtime[i])/2
-
-                if user_id in user_prior_question_elapsed_time_dict['prior_question_elapsed_time'].keys():            
-                    delta_prior_question_elapsed_time[i]=prior_question_elapsed_time-user_prior_question_elapsed_time_dict['prior_question_elapsed_time'][user_id]
-                    user_prior_question_elapsed_time_dict['prior_question_elapsed_time'][user_id]=prior_question_elapsed_time
-                else:           
-                    delta_prior_question_elapsed_time[i]=delta_prior_question_elapsed_time_mean    
-                    user_prior_question_elapsed_time_dict['prior_question_elapsed_time'].update({user_id:prior_question_elapsed_time})
-                i=i+1 
-
-
-            
-        test_df = test_df[test_df['content_type_id'] == 0].reset_index(drop=True)
-        #test_df = test_df[test_df['content_type_id'] == 0]
-        #right_index=True
-        #test_df = pd.merge(test_df, questions_df, on='content_id', how='left',right_index=True)    
-        #test_df = pd.concat([test_df.reset_index(drop=True), questions_df.reindex(test_df['content_id'].values).reset_index(drop=True)], axis=1)
-        test_df=test_df.merge(questions_df.loc[questions_df.index.isin(test_df['content_id'])],
-                    how='left', on='content_id', right_index=True)
-        
-        #test_df = pd.merge(test_df, user_lecture_stats_part, on=['user_id'], how="left",right_index=True)
-        #test_df = pd.concat([test_df.reset_index(drop=True), user_lecture_stats_part.reindex(test_df['user_id'].values).reset_index(drop=True)], axis=1)
-    #     test_df=test_df.merge(user_lecture_stats_part.loc[user_lecture_stats_part.index.isin(test_df['user_id'])],
-    #                   how='left', on='user_id', right_index=True)
-    
-        test_df['user_lecture_lv'] = user_lecture_sum / user_lecture_count
-        test_df['user_lecture_sum'] = user_lecture_sum
-        
-        test_df['user_interaction_count'] = user_lecture_count
-        test_df['user_interaction_timestamp_mean'] = test_df['timestamp']/user_lecture_count
-        
-        test_df['user_correctness'] = user_sum / user_count
-        test_df['user_uncorrect_count'] =user_count-user_sum
-        test_df['user_correct_count'] =user_sum
-        #test_df['user_answer_count'] =user_count
-        
-    #     test_df['user_correctness2'] = user_sum2 / user_count2
-    #     test_df['user_uncorrect_count2'] =user_count2-user_sum2
-    #     test_df['user_correct_count2'] =user_sum2
-        #test_df['user_answer_count2'] =user_count2
-        
-        #    
-        test_df['task_container_correctness'] = task_container_sum / task_container_count
-        test_df['task_container_cor_count'] = task_container_sum 
-        test_df['task_container_uncor_count'] =task_container_count-task_container_sum 
-        test_df['task_container_std'] = task_container_std 
-        #test_df['content_task_mean'] = content_task_mean 
-        
-        test_df['explanation_mean'] = explanation_sum / explanation_count
-        test_df['explanation_true_count'] = explanation_sum
-        test_df['explanation_false_count'] = explanation_count-explanation_sum 
-        
-        #
-        test_df['delta_prior_question_elapsed_time'] = delta_prior_question_elapsed_time 
-        
-    
-    
-        test_df["attempt_no"] = test_df[["user_id", "content_id"]].apply(lambda row: get_max_attempt(row["user_id"], row["content_id"]), axis=1)
-        test_df["lagtime"]=lagtime
-        test_df["lagtime2"]=lagtime2
-        test_df["lagtime3"]=lagtime3
-        #test_df["lagtime_mean"]=lagtime_means
-
-        
-
-        test_df['timestamp']=test_df['timestamp']/(1000*3600)
-        test_df.timestamp=test_df.timestamp.astype('float16')
-        test_df['lagtime']=test_df['lagtime']/(1000*3600)
-        test_df.lagtime=test_df.lagtime.astype('float32')
-        test_df['lagtime2']=test_df['lagtime2']/(1000*3600)
-        test_df.lagtime2=test_df.lagtime2.astype('float32')
-        test_df['lagtime3']=test_df['lagtime3']/(1000*3600)
-        test_df.lagtime3=test_df.lagtime3.astype('float32')
-        test_df['user_interaction_timestamp_mean']=test_df['user_interaction_timestamp_mean']/(1000*3600)
-        test_df.user_interaction_timestamp_mean=test_df.user_interaction_timestamp_mean.astype('float32')
-        
-        test_df['user_correctness'].fillna(0.66, inplace=True)
-        #test_df['user_correctness2'].fillna(0.66, inplace=True)
-        #
-        #test_df = test_df.astype(features_dict)
-
-        sub_preds = np.zeros(test_df.shape[0])
-        for i, model in enumerate(clfs, 1):
-            test_preds  = model.predict(test_df[features])
-            sub_preds += test_preds
-        test_df[target] = sub_preds / len(clfs)
-        
-    #     if(flag_lgbm):
-    #         test_df[target] = model.predict(test_df[features])
-    #     else:
-    #         test_df[target] = model.predict(test_df[features].values)
-        set_predict(test_df[['row_id', target]])
-        pbar.update(len(test_df))
-# %%
-y_true = valid_df[valid_df.content_type_id == 0].answered_correctly
-y_pred = pd.concat(predicted).answered_correctly
-print('\nValidation auc:', roc_auc_score(y_true, y_pred))
-print('# iterations:', len(predicted))
 
 # %% DEBUG
 
 (test_df, sample_prediction_df) = next(iter_test)
-prior_test_df = None
+
 #%%
 if prior_test_df is not None:
     prior_test_df[target] = eval(test_df['prior_group_answers_correct'].iloc[0])
@@ -983,64 +813,86 @@ if prior_test_df is not None:
     for user_id, answered_correctly in zip(user_ids, targets):
         user_sum_dict[user_id] += answered_correctly
         user_count_dict[user_id] += 1
-#             user_sum_dict2[user_id] += answered_correctly
-#             user_count_dict2[user_id] += 1   
+        if user_id in user_rolling_3_dict.keys():
+            # print("updating rolling mean")
+            user_rolling_3_dict[user_id] = \
+                np.append(user_rolling_3_dict[user_id][1:],answered_correctly>0.5)
+            user_rolling_6_dict[user_id] = \
+                np.append(user_rolling_6_dict[user_id][1:],answered_correctly>0.5)
+            user_rolling_10_dict[user_id] = \
+                np.append(user_rolling_10_dict[user_id][1:],answered_correctly>0.5)
         
 #%%
 prior_test_df = test_df.copy() 
     
-
-question_len = len(test_df[test_df['content_type_id'] == 0])
+test_q_len = len(test_df[test_df['content_type_id'] == 0])
 test_df['prior_question_had_explanation'].fillna(False, inplace=True)
 test_df.prior_question_had_explanation=test_df.prior_question_had_explanation.astype('int8')
 test_df['prior_question_elapsed_time'].fillna(prior_question_elapsed_time_mean, inplace=True)
 
+user_lecture_sum = np.zeros(test_q_len, dtype=np.int16)
+user_lecture_count = np.zeros(test_q_len, dtype=np.int16) 
 
-user_lecture_sum = np.zeros(question_len, dtype=np.int16)
-user_lecture_count = np.zeros(question_len, dtype=np.int16) 
+user_sum = np.zeros(test_q_len, dtype=np.int16)
+user_count = np.zeros(test_q_len, dtype=np.int16)
 
-user_sum = np.zeros(question_len, dtype=np.int16)
-user_count = np.zeros(question_len, dtype=np.int16)
-#     user_sum2 = np.zeros(question_len, dtype=np.int16)
-#     user_count2 = np.zeros(question_len, dtype=np.int16)
+user_rolling_3 = np.zeros(test_q_len, dtype=np.int8)
+user_rolling_6 = np.zeros(test_q_len, dtype=np.int8)
+user_rolling_10 = np.zeros(test_q_len, dtype=np.int8)
+#     user_sum2 = np.zeros(test_q_len, dtype=np.int16)
+#     user_count2 = np.zeros(test_q_len, dtype=np.int16)
 
 #     user_sum_dict_test=defaultdict(int)
 #     user_count_dict_test=defaultdict(int)
 
-task_container_sum = np.zeros(question_len, dtype=np.int32)
-task_container_count = np.zeros(question_len, dtype=np.int32)
-task_container_std = np.zeros(question_len, dtype=np.float16)
+task_container_sum = np.zeros(test_q_len, dtype=np.int32)
+task_container_count = np.zeros(test_q_len, dtype=np.int32)
+task_container_std = np.zeros(test_q_len, dtype=np.float16)
 
-explanation_sum = np.zeros(question_len, dtype=np.int32)
-explanation_count = np.zeros(question_len, dtype=np.int32)
-delta_prior_question_elapsed_time = np.zeros(question_len, dtype=np.int32)
+explanation_sum = np.zeros(test_q_len, dtype=np.int32)
+explanation_count = np.zeros(test_q_len, dtype=np.int32)
+delta_prior_question_elapsed_time = np.zeros(test_q_len, dtype=np.int32)
 
-attempt_no_count = np.zeros(question_len, dtype=np.int16)
-lagtime = np.zeros(question_len, dtype=np.float32)
-lagtime2 = np.zeros(question_len, dtype=np.float32)
-lagtime3 = np.zeros(question_len, dtype=np.float32)
-#lagtime_means = np.zeros(question_len, dtype=np.int32)
-#
+attempt_no_count = np.zeros(test_q_len, dtype=np.int16)
+lagtime = np.zeros(test_q_len, dtype=np.float32)
+lagtime2 = np.zeros(test_q_len, dtype=np.float32)
+lagtime3 = np.zeros(test_q_len, dtype=np.float32)
+#lagtime_means = np.zeros(test_q_len, dtype=np.int32)
 
-i=0
-for j, (user_id,prior_question_had_explanation,content_type_id,prior_question_elapsed_time,timestamp, content_id,task_container_id) in enumerate(zip(test_df['user_id'].values,test_df['prior_question_had_explanation'].values,test_df['content_type_id'].values,test_df['prior_question_elapsed_time'].values,test_df['timestamp'].values, test_df['content_id'].values, test_df['task_container_id'].values)):   
+#%%
+i = 0
+for _, (user_id,
+        prior_question_had_explanation,
+        content_type_id,
+        prior_question_elapsed_time,
+        timestamp, 
+        content_id,
+        task_container_id) in enumerate(zip(test_df['user_id'].values,
+                                            test_df['prior_question_had_explanation'].values,
+                                            test_df['content_type_id'].values,
+                                            test_df['prior_question_elapsed_time'].values,
+                                            test_df['timestamp'].values, 
+                                            test_df['content_id'].values, 
+                                            test_df['task_container_id'].values)):   
     #
-    user_lecture_sum_dict[user_id] += content_type_id
-    user_lecture_count_dict[user_id] += 1
-    if(content_type_id==1):#
-        x=1
+    
+    if content_type_id==1:#
+        user_lecture_sum_dict[user_id] += content_type_id 
+        # if content_type_id is 1, it is
+        user_lecture_count_dict[user_id] += 1
 #             if(len(user_lecture_stats_part[user_lecture_stats_part.user_id==user_id])==0):
 #                 user_lecture_stats_part = user_lecture_stats_part.append([{'user_id':user_id}], ignore_index=True)
 #                 user_lecture_stats_part.fillna(0, inplace=True)
 #                 user_lecture_stats_part.loc[user_lecture_stats_part.user_id==user_id,part_lectures_columns + types_of_lectures_columns]+=lectures_df[lectures_df.lecture_id==content_id][part_lectures_columns + types_of_lectures_columns].values
 #             else:
 #                 user_lecture_stats_part.loc[user_lecture_stats_part.user_id==user_id,part_lectures_columns + types_of_lectures_columns]+=lectures_df[lectures_df.lecture_id==content_id][part_lectures_columns + types_of_lectures_columns].values
-    if (content_type_id==0):#   
+    if content_type_id==0:#   question
         user_lecture_sum[i] = user_lecture_sum_dict[user_id]
         user_lecture_count[i] = user_lecture_count_dict[user_id]
             
         user_sum[i] = user_sum_dict[user_id]
         user_count[i] = user_count_dict[user_id]
+
 #             user_sum2[i] = user_sum_dict2[user_id]
 #             user_count2[i] = user_count_dict2[user_id]
 #         content_sum[i] = content_sum_dict[content_id]
@@ -1083,13 +935,22 @@ for j, (user_id,prior_question_had_explanation,content_type_id,prior_question_el
 #                 lagtime_mean_dict.update({user_id:lagtime_mean})
 #                 lagtime_means[i]=(lagtime_mean_dict[user_id]+lagtime[i])/2
 
-        if user_id in user_prior_question_elapsed_time_dict['prior_question_elapsed_time'].keys():            
+        if user_id in user_prior_question_elapsed_time_dict['prior_question_elapsed_time'].keys(): 
             delta_prior_question_elapsed_time[i]=prior_question_elapsed_time-user_prior_question_elapsed_time_dict['prior_question_elapsed_time'][user_id]
             user_prior_question_elapsed_time_dict['prior_question_elapsed_time'][user_id]=prior_question_elapsed_time
         else:           
             delta_prior_question_elapsed_time[i]=delta_prior_question_elapsed_time_mean    
             user_prior_question_elapsed_time_dict['prior_question_elapsed_time'].update({user_id:prior_question_elapsed_time})
-        i=i+1 
+
+        if user_id in user_rolling_3_dict.keys():
+            user_rolling_3[i] = sum(user_rolling_3_dict[user_id])
+            user_rolling_6[i] = sum(user_rolling_6_dict[user_id])
+            user_rolling_10[i] = sum(user_rolling_10_dict[user_id])
+        else:
+            user_rolling_3[i] = round(3*0.66)
+            user_rolling_6[i] = round(6*0.66)
+            user_rolling_10[i] = round(10*0.66)
+        i += 1    
 
 
     
@@ -1113,8 +974,13 @@ test_df['user_interaction_count'] = user_lecture_count
 test_df['user_interaction_timestamp_mean'] = test_df['timestamp']/user_lecture_count
 
 test_df['user_correctness'] = user_sum / user_count
-test_df['user_uncorrect_count'] =user_count-user_sum
+test_df['user_uncorrect_count'] = user_count-user_sum
 test_df['user_correct_count'] =user_sum
+
+test_df['rolling_3_correctness'] = user_rolling_3
+test_df['rolling_6_correctness'] = user_rolling_6
+test_df['rolling_10_correctness'] = user_rolling_10
+
 #test_df['user_answer_count'] =user_count
 
 #     test_df['user_correctness2'] = user_sum2 / user_count2
@@ -1125,7 +991,7 @@ test_df['user_correct_count'] =user_sum
 #    
 test_df['task_container_correctness'] = task_container_sum / task_container_count
 test_df['task_container_cor_count'] = task_container_sum 
-test_df['task_container_uncor_count'] =task_container_count-task_container_sum 
+test_df['task_container_uncor_count'] = task_container_count-task_container_sum 
 test_df['task_container_std'] = task_container_std 
 #test_df['content_task_mean'] = content_task_mean 
 
@@ -1138,7 +1004,8 @@ test_df['delta_prior_question_elapsed_time'] = delta_prior_question_elapsed_time
 
 
 
-test_df["attempt_no"] = test_df[["user_id", "content_id"]].apply(lambda row: get_max_attempt(row["user_id"], row["content_id"]), axis=1)
+test_df["attempt_no"] = test_df[["user_id", "content_id"]]\
+    .apply(lambda row: get_max_attempt(row["user_id"], row["content_id"]), axis=1)
 test_df["lagtime"]=lagtime
 test_df["lagtime2"]=lagtime2
 test_df["lagtime3"]=lagtime3
@@ -1168,9 +1035,218 @@ for i, model in enumerate(clfs, 1):
     sub_preds += test_preds
 test_df[target] = sub_preds / len(clfs)
 
-#     if(flag_lgbm):
-#         test_df[target] = model.predict(test_df[features])
-#     else:
-#         test_df[target] = model.predict(test_df[features].values)
 set_predict(test_df[['row_id', target]])
-pbar.update(len(test_df))
+
+
+#%%
+#%% rollout for iter_env
+
+iter_test = Iter_Valid(valid_df, max_user=1000)
+
+predicted = []
+def set_predict(df):
+    predicted.append(df)
+
+len_test = len(valid_df)
+prior_test_df = None
+
+with tqdm(total=len_test) as pbar:
+    for (test_df, sample_prediction_df) in iter_test:    
+        if prior_test_df is not None:
+            prior_test_df[target] = eval(test_df['prior_group_answers_correct'].iloc[0])
+            prior_test_df = prior_test_df[prior_test_df[target] != -1].reset_index(drop=True)
+            
+            prior_test_df['prior_question_had_explanation'].fillna(False, inplace=True)       
+            prior_test_df.prior_question_had_explanation=prior_test_df.prior_question_had_explanation.astype('int8')
+        
+            user_ids = prior_test_df['user_id'].values
+            targets = prior_test_df[target].values        
+            
+            for user_id, answered_correctly in zip(user_ids, targets):
+                user_sum_dict[user_id] += answered_correctly
+                user_count_dict[user_id] += 1
+                if user_id in user_rolling_3_dict.keys():
+                    # print("updating rolling mean")
+                    user_rolling_3_dict[user_id] = \
+                        np.append(user_rolling_3_dict[user_id][1:],answered_correctly>0.5)
+                    user_rolling_6_dict[user_id] = \
+                        np.append(user_rolling_6_dict[user_id][1:],answered_correctly>0.5)
+                    user_rolling_10_dict[user_id] = \
+                        np.append(user_rolling_10_dict[user_id][1:],answered_correctly>0.5)
+                
+
+        prior_test_df = test_df.copy() 
+            
+        
+        test_q_len = len(test_df[test_df['content_type_id'] == 0])
+        test_df['prior_question_had_explanation'].fillna(False, inplace=True)
+        test_df.prior_question_had_explanation=test_df.prior_question_had_explanation.astype('int8')
+        test_df['prior_question_elapsed_time'].fillna(prior_question_elapsed_time_mean, inplace=True)
+        
+
+        user_lecture_sum = np.zeros(test_q_len, dtype=np.int16)
+        user_lecture_count = np.zeros(test_q_len, dtype=np.int16) 
+        
+        user_sum = np.zeros(test_q_len, dtype=np.int16)
+        user_count = np.zeros(test_q_len, dtype=np.int16)
+
+        user_rolling_3 = np.zeros(test_q_len, dtype=np.int8)
+        user_rolling_6 = np.zeros(test_q_len, dtype=np.int8)
+        user_rolling_10 = np.zeros(test_q_len, dtype=np.int8)
+
+        task_container_sum = np.zeros(test_q_len, dtype=np.int32)
+        task_container_count = np.zeros(test_q_len, dtype=np.int32)
+        task_container_std = np.zeros(test_q_len, dtype=np.float16)
+
+        explanation_sum = np.zeros(test_q_len, dtype=np.int32)
+        explanation_count = np.zeros(test_q_len, dtype=np.int32)
+        delta_prior_question_elapsed_time = np.zeros(test_q_len, dtype=np.int32)
+
+        attempt_no_count = np.zeros(test_q_len, dtype=np.int16)
+        lagtime = np.zeros(test_q_len, dtype=np.float32)
+        lagtime2 = np.zeros(test_q_len, dtype=np.float32)
+        lagtime3 = np.zeros(test_q_len, dtype=np.float32)
+    
+        i = 0
+        for _, (user_id,
+                prior_question_had_explanation,
+                content_type_id,
+                prior_question_elapsed_time,
+                timestamp, 
+                content_id,
+                task_container_id) in enumerate(zip(test_df['user_id'].values,
+                                    test_df['prior_question_had_explanation'].values,
+                                    test_df['content_type_id'].values,
+                                    test_df['prior_question_elapsed_time'].values,
+                                    test_df['timestamp'].values, 
+                                    test_df['content_id'].values, 
+                                    test_df['task_container_id'].values)):   
+            #
+            if content_type_id == 1:#
+                user_lecture_sum_dict[user_id] += content_type_id
+                user_lecture_count_dict[user_id] += 1
+            
+            if content_type_id == 0:#   
+                user_lecture_sum[i] = user_lecture_sum_dict[user_id]
+                user_lecture_count[i] = user_lecture_count_dict[user_id]
+                    
+                user_sum[i] = user_sum_dict[user_id]
+                user_count[i] = user_count_dict[user_id]
+                task_container_sum[i] = task_container_sum_dict[task_container_id]
+                task_container_count[i] = task_container_count_dict[task_container_id]
+                task_container_std[i]=task_container_std_dict[task_container_id]
+
+                explanation_sum_dict[user_id] += prior_question_had_explanation
+                explanation_count_dict[user_id] += 1
+                explanation_sum[i] = explanation_sum_dict[user_id]
+                explanation_count[i] = explanation_count_dict[user_id]
+
+                if user_id in max_timestamp_u_dict['max_time_stamp'].keys():
+                    lagtime[i]=timestamp-max_timestamp_u_dict['max_time_stamp'][user_id]
+                    if(max_timestamp_u_dict2['max_time_stamp2'][user_id]==lagtime_mean2):#
+                        lagtime2[i]=lagtime_mean2
+                        lagtime3[i]=lagtime_mean3
+                    else:
+                        lagtime2[i]=timestamp-max_timestamp_u_dict2['max_time_stamp2'][user_id]
+                        if(max_timestamp_u_dict3['max_time_stamp3'][user_id]==lagtime_mean3):
+                            lagtime3[i]=lagtime_mean3 #
+                        else:
+                            lagtime3[i]=timestamp-max_timestamp_u_dict3['max_time_stamp3'][user_id]
+                        
+                        max_timestamp_u_dict3['max_time_stamp3'][user_id]=max_timestamp_u_dict2['max_time_stamp2'][user_id]
+                            
+                    max_timestamp_u_dict2['max_time_stamp2'][user_id]=max_timestamp_u_dict['max_time_stamp'][user_id]
+                    max_timestamp_u_dict['max_time_stamp'][user_id]=timestamp
+                else:
+                    lagtime[i]=lagtime_mean
+                    max_timestamp_u_dict['max_time_stamp'].update({user_id:timestamp})
+                    lagtime2[i]=lagtime_mean2#
+                    max_timestamp_u_dict2['max_time_stamp2'].update({user_id:lagtime_mean2})
+                    lagtime3[i]=lagtime_mean3#
+                    max_timestamp_u_dict3['max_time_stamp3'].update({user_id:lagtime_mean3})
+
+
+                if user_id in user_prior_question_elapsed_time_dict['prior_question_elapsed_time'].keys():            
+                    delta_prior_question_elapsed_time[i]=prior_question_elapsed_time-user_prior_question_elapsed_time_dict['prior_question_elapsed_time'][user_id]
+                    user_prior_question_elapsed_time_dict['prior_question_elapsed_time'][user_id]=prior_question_elapsed_time
+                else:           
+                    delta_prior_question_elapsed_time[i]=delta_prior_question_elapsed_time_mean    
+                    user_prior_question_elapsed_time_dict['prior_question_elapsed_time'].update({user_id:prior_question_elapsed_time})
+                
+                if user_id in user_rolling_3_dict.keys():
+                    user_rolling_3[i] = sum(user_rolling_3_dict[user_id])
+                    user_rolling_6[i] = sum(user_rolling_6_dict[user_id])
+                    user_rolling_10[i] = sum(user_rolling_10_dict[user_id])
+                else:
+                    user_rolling_3[i] = round(3*0.66)
+                    user_rolling_6[i] = round(6*0.66)
+                    user_rolling_10[i] = round(10*0.66)
+                i += 1 
+
+
+            
+        test_df = test_df[test_df['content_type_id'] == 0].reset_index(drop=True)
+        test_df=test_df.merge(questions_df.loc[questions_df.index.isin(test_df['content_id'])],
+                    how='left', on='content_id', right_index=True)
+        
+    
+        test_df['user_lecture_lv'] = user_lecture_sum / user_lecture_count
+        test_df['user_lecture_sum'] = user_lecture_sum
+        
+        test_df['user_interaction_count'] = user_lecture_count
+        test_df['user_interaction_timestamp_mean'] = test_df['timestamp']/user_lecture_count
+        
+        test_df['user_correctness'] = user_sum / user_count
+        test_df['user_uncorrect_count'] =user_count-user_sum
+        test_df['user_correct_count'] = user_sum
+
+        test_df['rolling_3_correctness'] = user_rolling_3
+        test_df['rolling_6_correctness'] = user_rolling_6
+        test_df['rolling_10_correctness'] = user_rolling_10
+        #    
+        test_df['task_container_correctness'] = task_container_sum / task_container_count
+        test_df['task_container_cor_count'] = task_container_sum 
+        test_df['task_container_uncor_count'] =task_container_count-task_container_sum 
+        test_df['task_container_std'] = task_container_std 
+        #test_df['content_task_mean'] = content_task_mean 
+        
+        test_df['explanation_mean'] = explanation_sum / explanation_count
+        test_df['explanation_true_count'] = explanation_sum
+        test_df['explanation_false_count'] = explanation_count-explanation_sum 
+        
+        #
+        test_df['delta_prior_question_elapsed_time'] = delta_prior_question_elapsed_time 
+    
+        test_df["attempt_no"] = test_df[["user_id", "content_id"]].apply(lambda row: get_max_attempt(row["user_id"], row["content_id"]), axis=1)
+        test_df["lagtime"]=lagtime
+        test_df["lagtime2"]=lagtime2
+        test_df["lagtime3"]=lagtime3
+        #test_df["lagtime_mean"]=lagtime_means
+
+        test_df['timestamp']=test_df['timestamp']/(1000*3600)
+        test_df.timestamp=test_df.timestamp.astype('float16')
+        test_df['lagtime']=test_df['lagtime']/(1000*3600)
+        test_df.lagtime=test_df.lagtime.astype('float32')
+        test_df['lagtime2']=test_df['lagtime2']/(1000*3600)
+        test_df.lagtime2=test_df.lagtime2.astype('float32')
+        test_df['lagtime3']=test_df['lagtime3']/(1000*3600)
+        test_df.lagtime3=test_df.lagtime3.astype('float32')
+        test_df['user_interaction_timestamp_mean']=test_df['user_interaction_timestamp_mean']/(1000*3600)
+        test_df.user_interaction_timestamp_mean=test_df.user_interaction_timestamp_mean.astype('float32')
+        
+        test_df['user_correctness'].fillna(0.66, inplace=True)
+
+        sub_preds = np.zeros(test_df.shape[0])
+        for i, model in enumerate(clfs, 1):
+            test_preds  = model.predict(test_df[features])
+            sub_preds += test_preds
+        test_df[target] = sub_preds / len(clfs)
+        
+        set_predict(test_df[['row_id', target]])
+        pbar.update(len(test_df))
+# %%
+y_true = valid_df[valid_df.content_type_id == 0].answered_correctly
+y_pred = pd.concat(predicted).answered_correctly
+print('\nValidation auc:', roc_auc_score(y_true, y_pred))
+print('# iterations:', len(predicted))
+# %%

@@ -8,10 +8,16 @@ import time
 from sklearn.metrics import roc_auc_score
 import torch
 
-HOME =  "/home/scao/Documents/kaggle-riiid-test/"
-DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
-MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
+# HOME =  "/home/scao/Documents/kaggle-riiid-test/"
+# DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
+# MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
+
+HOME = os.path.abspath(os.path.join(os.path.dirname(__file__),".."))
+sys.path.append(HOME) 
+MODEL_DIR = HOME+'/model/'
+DATA_DIR = HOME+'/data/'
 sys.path.append(HOME)
+
 from sakt import *
 from utils import *
 from iter_env import *
@@ -30,17 +36,34 @@ if DEBUG:
 
 #%%
 # if __name__ == "__main__":
+
+
+TRAIN_DTYPES = {
+    TIMESTAMP: 'int64',
+    USER_ID: 'int32', 
+    CONTENT_ID: 'int16', 
+    CONTENT_TYPE_ID:'int8', 
+    TASK_CONTAINER_ID: 'int16',
+    TARGET: 'int8', 
+    PRIOR_QUESTION_TIME: 'float32', 
+    PRIOR_QUESTION_EXPLAIN: 'bool'
+}
+print("\nLoading train for inference...")
+train_df = pd.read_parquet(DATA_DIR+'cv5_train.parquet',
+                                    columns=list(TRAIN_DTYPES.keys()))
+train_df = train_df.astype(TRAIN_DTYPES)
+print("Loaded train.")
+
+
 print("\nLoading private simulated test set...")
 if PRIVATE:
-    test_df = pd.read_parquet(DATA_DIR+'cv3_valid.parquet')
+    test_df = pd.read_parquet(DATA_DIR+'cv5_valid.parquet')
     test_df = test_df[:SIMU_PRI_SIZE]
 else:
     test_df = pd.read_parquet(DATA_DIR+'test_pub_simu.parquet')
     test_df = test_df[:SIMU_PUB_SIZE]
 print("Loaded test .")
-print("\nLoading train for inference...")
-train_df = pd.read_parquet(DATA_DIR+'cv3_train.parquet')
-print("Loaded train.")
+
 
 train_df = train_df[TRAIN_DTYPES.keys()]
 train_df = train_df[train_df[CONTENT_TYPE_ID] == False].reset_index(drop = True)
@@ -143,6 +166,11 @@ with tqdm(total=len_test) as pbar:
                 output, _ = model(x, target_id)
 
             pred_probs = torch.sigmoid(SCALING*output[:, -1])
+            
+            # post-processing
+            pred_probs[pred_probs<0.25] = \
+                0.25 - torch.exp(-1/(0.25-pred_probs[pred_probs<0.25]))
+
             output_all.extend(pred_probs.reshape(-1).data.cpu().numpy())
         '''prediction code ends'''
 

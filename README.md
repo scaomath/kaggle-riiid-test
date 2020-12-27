@@ -15,7 +15,7 @@ Playground for Kaggle competition Riiid! Answer Correctness Prediction
 - [x] Rolling mean of previous $k$ questions correct or not 
 - [ ] ELO rating of the users
 
-## Attention-based
+## Transformer encoder-based
 
 - (Dec 9) Increasing `seq_len` for SAKT new model does not work ~~well~~ as intended.
 
@@ -67,6 +67,8 @@ TO-DO:
 - (Dec 24) Baseline (baseline file), debugging ver (first 12m rows), CV 0.7759, iter_env CV: 0.7473
 
 - (Dec 25) Added `rolling_w_mean` where `w` is the window size, local CV increased to 0.7784, still working on adding this feature to the inference.
+
+- (Dec 26) Added `rolling_mean` for target shifted by 1 (i.e., previous question correct or not). iter_env CV: 0.7444 (worse than the baseline)
 
 
 ## NN and deeper models

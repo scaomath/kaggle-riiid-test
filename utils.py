@@ -100,6 +100,9 @@ def color(string: str, color: Colors = Colors.yellow) -> str:
 
 @contextmanager
 def timer(label: str) -> None:
+    '''
+    https://www.kaggle.com/c/riiid-test-answer-prediction/discussion/203020#1111022
+    '''
     """compute the time the code block takes to run.
     """
     p = psutil.Process(os.getpid())
@@ -120,7 +123,7 @@ def timer(label: str) -> None:
 
 @contextmanager
 def trace(title: str):
-    t0 = time.time()
+    t0 = time()
     p = psutil.Process(os.getpid())
     m0 = p.memory_info()[0] / 2. ** 30
     yield
@@ -128,7 +131,7 @@ def trace(title: str):
     delta = m1 - m0
     sign = '+' if delta >= 0 else '-'
     delta = math.fabs(delta)
-    print(f"[{m1:.1f}GB({sign}{delta:.1f}GB):{time.time() - t0:.1f}sec] {title} ", file=sys.stderr)
+    print(f"[{m1:.1f}GB ({sign}{delta:.3f}GB): {time() - t0:.2f}sec] {title} ", file=sys.stderr)
 
 
 def get_date():
@@ -136,6 +139,9 @@ def get_date():
     return today.strftime("%b-%d-%Y")
 
 def roc_auc_compute_fn(y_targets, y_preds):
+    '''
+    roc_auc func for torch tensors
+    '''
     y_true = y_targets.cpu().numpy()
     y_pred = y_preds.cpu().numpy()
     return roc_auc_score(y_true, y_pred)
