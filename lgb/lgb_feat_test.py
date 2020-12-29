@@ -28,13 +28,16 @@ pd.set_option('display.max_columns', 50)
 pd.set_option('display.width', 10)
 pd.set_option('display.expand_frame_repr',False)
 pd.set_option('max_colwidth', 20)
+
+from jupyterthemes import jtplot
+jtplot.style(theme='onedork', context='notebook', ticks=True, grid=False)
 # %%
 
 '''
 Version notes: README.md
 1. baseline CV 0.7767
 2. rolling mean added (CV increased but LB decreased)
-3. question difficulty weighted user accuracy
+3. question difficulty weighted user accuracy: local CV 0.7775
 '''
 
 '''
@@ -81,7 +84,7 @@ with timer("Loading train"):
         train_df = pd.read_parquet(DATA_DIR+'cv5_train.parquet',
                                     columns=list(TRAIN_DTYPES.keys()))
         train_df = train_df.astype(TRAIN_DTYPES)
-        train_df = train_df[:12_000_000]
+        train_df = train_df[:15_000_000]
 gc.collect()    
 # %%
 
@@ -612,12 +615,12 @@ categorical_columns= [
 features=list(features_dict.keys())
 
 params = {
-            'num_leaves': 100,
-            'max_bin': 200,
+            'num_leaves': 200,
+            'max_bin': 350,
             'min_child_weight': 0.05,
             'feature_fraction': 0.6,
-            'bagging_fraction': 0.58,
-            'min_data_in_leaf': 512,
+            'bagging_fraction': 0.6,
+            # 'min_data_in_leaf': 105,
             'objective': 'binary',
             'max_depth': -1,
             'learning_rate': 0.05,
