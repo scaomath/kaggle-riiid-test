@@ -8,12 +8,6 @@ Playground for Kaggle competition Riiid! Answer Correctness Prediction
 - How to address the fact that a random guess would yield 25% correct rate?
 - How to do cross-validation using a `KFold` or a stratified folds in the current setting?
 
-### Features TO-DO:
-
-- [ ] Commonness/difficulty rating of the questions
-- [ ] difficulty-weighted interaction time/gap time
-- [x] Rolling mean of previous $k$ questions correct or not 
-- [ ] ELO rating of the users
 
 ## Transformer encoder-based
 
@@ -55,20 +49,31 @@ If there is layer normalization, multiplying with a scaling factor does not matt
 
 TO-DO:
 - [x] Test label smoothing using (a) a simple label change, then multiply a factor to the prediction. Does not work well.
-
+- [ ] Testing add a `previous_answers_correct` embedding
 - [ ] Testing adding a "User growth" feature to the embedding...
-- [ ]  Using a multitarget with the second target being the LGBM oof-prediction/other things.
+- [ ] Using a multitarget with the second target being the LGBM oof-prediction/other things.
 
 
 ## LightGBM models
 
 - (Dec 18) Testing version of LGB feat gen as of Dec 18
 
-- (Dec 24) Baseline (baseline file), debugging ver (first 12m rows), CV 0.7759, iter_env CV: 0.7473
+- (Dec 24) Baseline (baseline file), debugging ver (first 12m rows), CV 0.7759, iter_env CV: 0.744681 (7 runs of 100k rows in `cv5_valid`), LB 0.776
 
 - (Dec 25) Added `rolling_w_mean` where `w` is the window size, local CV increased to 0.7784, still working on adding this feature to the inference.
 
-- (Dec 26) Added `rolling_mean` for target shifted by 1 (i.e., previous question correct or not). iter_env CV: 0.7444 (worse than the baseline)
+- (Dec 26) Added `rolling_mean` for target shifted by 1 (i.e., previous question correct or not). iter_env CV: 0.7477 (y runs of 50k rows in `cv5_valid`), LB 0.766
+
+
+
+### Features TO-DO:
+
+- [ ] Commonness/difficulty rating of the questions
+- [ ] difficulty-weighted interaction time/gap time
+- [x] Rolling mean of previous $k$ questions correct or not 
+- [ ] Rolling mean of a feature characterizing the user's streak or readiness/status
+- [ ] ELO rating of the users
+
 
 
 ## NN and deeper models

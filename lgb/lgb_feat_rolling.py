@@ -32,9 +32,9 @@ pd.set_option('max_colwidth', 20)
 
 '''
 Version notes: README.md
-1. baseline CV 0.7767
-2. rolling mean added (CV increased but LB decreased)
-3. question difficulty weighted user accuracy
+
+rolling mean added (CV increased but LB decreased)
+
 '''
 
 '''
@@ -67,7 +67,7 @@ NROWS_TRAIN = 5_000_000
 NROWS_TRAIN_START = 12_000_000
 NROWS_TEST = 50_000
 
-DEBUG = False
+DEBUG = True
 TRAIN = True
 # %%
 with timer("Loading train"):
@@ -81,7 +81,7 @@ with timer("Loading train"):
         train_df = pd.read_parquet(DATA_DIR+'cv5_train.parquet',
                                     columns=list(TRAIN_DTYPES.keys()))
         train_df = train_df.astype(TRAIN_DTYPES)
-        train_df = train_df[:12_000_000]
+        train_df = train_df[:30_000_000]
 gc.collect()    
 # %%
 
@@ -251,27 +251,25 @@ train_df.user_uncorrect_count=train_df.user_uncorrect_count.astype('int16')
 #train_df.user_answer_count=train_df.user_answer_count.astype('int16')
 
 #%%
-
-# rolling_windows = [3, 6, 10]
-# user_rolling_df = pd.DataFrame()
-
-# with timer('Computing rolling'):
-#     for w in rolling_windows:
-#         # because the 'lag' feature has first entry NaN, so without groupby user_id
-#         # still yields the correct result
-#         train_df[f'rolling_{w}_correctness'] = train_df['lag'].rolling(w).sum()
-#         # rolling_mean = train_df.groupby('user_id')[f'rolling_{w}_correctness'].agg(['mean'])
-#         train_df[f'rolling_{w}_correctness'] = train_df.groupby(['user_id'], sort=False)[f'rolling_{w}_correctness'].apply(lambda x: x.fillna(x.mean()))
-#         rolling_mean = train_df[f'rolling_{w}_correctness'].mean()
-#         train_df[f'rolling_{w}_correctness'].fillna(rolling_mean, inplace=True)
-#         train_df[f'rolling_{w}_correctness'] = train_df[f'rolling_{w}_correctness'].round().astype('int8')
-#         user_rolling_df[f"user_rolling_{w}"] = train_df.groupby('user_id')['lag']\
-#             .apply(lambda r: (r.fillna(0).astype('int8').values[-w:]))
-
-# user_rolling_df.index.names = ['user_id']
+rolling_windows = [3, 6, 10]
+for w in rolling_windows:
+    # because the 'lag' feature has first entry NaN, so without groupby user_id
+    # still yields the correct result
+    train_df[f'rolling_{w}_correctness'] = train_df['lag'].rolling(w).sum()
+    # rolling_mean = train_df.groupby('user_id')[f'rolling_{w}_correctness'].agg(['mean'])
+    train_df[f'rolling_{w}_correctness'] = train_df.groupby(['user_id'], sort=False)[f'rolling_{w}_correctness'].apply(lambda x: x.fillna(x.mean()))
+    rolling_mean = train_df[f'rolling_{w}_correctness'].mean()
+    train_df[f'rolling_{w}_correctness'].fillna(rolling_mean, inplace=True)
+    train_df[f'rolling_{w}_correctness'] = train_df[f'rolling_{w}_correctness'].round().astype('int8')
 
 # train_df.loc[train_df.user_id==260752571, ['lag']]
-
+#%%
+user_rolling_df = pd.DataFrame()
+with timer('Computing rolling'):
+    for w in rolling_windows:
+        user_rolling_df[f"user_rolling_{w}"] = train_df.groupby('user_id')['lag']\
+            .apply(lambda r: (r.fillna(0).astype('int8').values[-w:]))
+user_rolling_df.index.names = ['user_id']
 # user_rolling_df[] = train_df.groupby('user_id')['lag']\
 #     .apply(lambda r: (r.fillna(0).astype('int8').values[-3:]))
 # user_rolling_6 = train_df.groupby('user_id')['lag']\
@@ -428,79 +426,7 @@ del content_agg, bundle_agg, part_agg
 #del tags1_agg
 gc.collect()
 
-# %%
-flag_lgbm=True
-clfs = list()
-trains = list()
-valids = list()
-
-# train_df_clf = train_df[NROWS_TRAIN_START:NROWS_TRAIN_START+NROWS_TRAIN]
-train_df_clf=train_df.copy()
-
-del train_df
-gc.collect()
-
 #%%
-users=train_df_clf['user_id'].drop_duplicates()
-
-users=users.sample(frac=0.08)
-users_df=pd.DataFrame()
-users_df['user_id']=users.values
-
-
-valid_df_newuser = pd.merge(train_df_clf, users_df, 
-                            on=['user_id'], 
-                            how='inner',
-                            right_index=True)
-del users_df
-del users
-gc.collect()
-#%% 
-# CV strategy is to add some unseen users
-# then just sample train (need to change CV)
-train_df_clf.drop(valid_df_newuser.index, inplace=True)
-
-## merging with questions to get questions features
-train_df_clf = pd.merge(train_df_clf, questions_df, 
-                        on='content_id', 
-                        how='left',
-                        right_index=True)#
-
-train_df_clf['content_weighted_user_correctness_1'] = \
-(train_df_clf['user_correctness']*train_df_clf['content_correctness']**2).astype('float32')
-
-train_df_clf['content_weighted_user_correctness_2'] = \
-(train_df_clf['content_correctness']*train_df_clf['user_correctness']**2).astype('float32')
-
-valid_df_newuser = pd.merge(valid_df_newuser, questions_df, 
-                            on='content_id', 
-                            how='left',
-                            right_index=True)#
-
-valid_df_newuser['content_weighted_user_correctness_1'] = \
-(valid_df_newuser['user_correctness']*valid_df_newuser['content_correctness']**2).astype('float32')
-valid_df_newuser['content_weighted_user_correctness_2'] = \
-(valid_df_newuser['content_correctness']*valid_df_newuser['user_correctness']**2).astype('float32')
-
-
-valid_df=train_df_clf.sample(frac=0.1)
-train_df_clf.drop(valid_df.index, inplace=True)
-
-valid_df = valid_df.append(valid_df_newuser)
-del valid_df_newuser
-gc.collect()
-#%%
-
-print('train_df length：',len(train_df_clf))
-print('valid_df length：',len(valid_df))
-print("number of all features: ", len(train_df_clf.columns))
-trains.append(train_df_clf)
-valids.append(valid_df)
-#%%
-del valid_df
-gc.collect()
-#%%
-
 features_dict = {
     #'user_id',
     'timestamp':'float16',#
@@ -519,7 +445,7 @@ features_dict = {
     'user_correctness':'float16',#
     'user_uncorrect_count':'int16',#
     'user_correct_count':'int16',#
-    # 'content_correctness':'float16',
+    'content_correctness':'float16',
     'content_correctness_std':'float16',
     'content_correct_count':'int32',
     'content_uncorrect_count':'int32',#
@@ -529,9 +455,9 @@ features_dict = {
     'content_explanation_true_mean':'float16',
     'content_weighted_user_correctness_1': 'float16', # u*c^2
     'content_weighted_user_correctness_2': 'float16', # u^2*c
-    # 'rolling_3_correctness':'int8',
-    # 'rolling_6_correctness':'int8',
-    # 'rolling_10_correctness':'int8',
+    'rolling_3_correctness':'int8',
+    'rolling_6_correctness':'int8',
+    'rolling_10_correctness':'int8',
     'task_container_correctness':'float16',
     'task_container_std':'float16',
     'task_container_cor_count':'int32',#
@@ -610,6 +536,78 @@ categorical_columns= [
 ]
 
 features=list(features_dict.keys())
+# %%
+flag_lgbm=True
+clfs = list()
+trains = list()
+valids = list()
+
+# train_df_clf = train_df[NROWS_TRAIN_START:NROWS_TRAIN_START+NROWS_TRAIN]
+train_df_clf=train_df.copy()
+
+del train_df
+gc.collect()
+
+#%%
+users=train_df_clf['user_id'].drop_duplicates()
+
+users=users.sample(frac=0.08)
+users_df=pd.DataFrame()
+users_df['user_id']=users.values
+
+
+valid_df_newuser = pd.merge(train_df_clf, users_df, 
+                            on=['user_id'], 
+                            how='inner',
+                            right_index=True)
+del users_df
+del users
+gc.collect()
+#%% 
+# CV strategy is to add some unseen users
+# then just sample train (need to change CV)
+train_df_clf.drop(valid_df_newuser.index, inplace=True)
+
+## merging with questions to get questions features
+train_df_clf = pd.merge(train_df_clf, questions_df, 
+                        on='content_id', 
+                        how='left',
+                        right_index=True)#
+
+train_df_clf['content_weighted_user_correctness_1'] = \
+    train_df_clf['user_correctness']*train_df_clf['content_correctness']**2
+train_df_clf['content_weighted_user_correctness_2'] = \
+    train_df_clf['content_correctness']*train_df_clf['user_correctness']**2
+
+valid_df_newuser = pd.merge(valid_df_newuser, questions_df, 
+                            on='content_id', 
+                            how='left',
+                            right_index=True)#
+
+valid_df_newuser['content_weighted_user_correctness_1'] = \
+    valid_df_newuser['user_correctness']*valid_df_newuser['content_correctness']**2
+valid_df_newuser['content_weighted_user_correctness_2'] = \
+    valid_df_newuser['content_correctness']*valid_df_newuser['user_correctness']**2
+
+
+valid_df=train_df_clf.sample(frac=0.1)
+train_df_clf.drop(valid_df.index, inplace=True)
+
+valid_df = valid_df.append(valid_df_newuser)
+del valid_df_newuser
+gc.collect()
+#%%
+
+print('train_df length：',len(train_df_clf))
+print('valid_df length：',len(valid_df))
+print("number of all features: ", len(train_df_clf.columns))
+print("number of selected  of features: ", len(features))
+trains.append(train_df_clf)
+valids.append(valid_df)
+#%%
+del valid_df
+gc.collect()
+#%%
 
 params = {
             'num_leaves': 100,
@@ -630,19 +628,18 @@ params = {
             'random_state': 1127
          }
 
-# params = {
-#         'objective': 'binary', 
-#         'seed': 1127, 
-#         'metric': 'AUC', 
-#         'boosting_type': 'gbdt', 
-#         'lambda_l1': 0.23, 
-#         'lambda_l2': 0.11, 
-#         'num_leaves': 200, 
-#         'feature_fraction': 0.7, 
-#         'bagging_fraction': 0.7, 
-#         'bagging_freq': 7, 
-#         'min_child_samples': 200
-#         }
+params = {
+        'objective': 'binary', 
+        'seed': 1127, 
+        'metric': 'AUC', 
+        'boosting_type': 'gbdt', 
+        'lambda_l1': 0.23, 
+        'lambda_l2': 0.11, 
+        'num_leaves': 206, 'feature_fraction': 0.7, 
+        'bagging_fraction': 0.7, 
+        'bagging_freq': 7, 
+        'min_child_samples': 45
+        }
 
 
 
@@ -675,6 +672,9 @@ if TRAIN:
         val_auc = model.best_score['valid_1']['auc']
         model.save_model(MODEL_DIR+f'lgb_base_fold_{i}_auc_{val_auc:.4f}.txt')   
         clfs.append(model)
+    # if TRAIN:
+    del trains, valids, tr_data, va_data
+    gc.collect()
 
 else:
     with timer("Loading trained model"):
@@ -690,9 +690,7 @@ lgb.plot_importance(model, ax=ax,importance_type='gain',max_num_features=50)
 plt.show()
 
 # %%
-if TRAIN:
-    del trains, valids, tr_data, va_data
-    gc.collect()
+
 # with open(MODEL_DIR+f'lgb_auc_{val_auc:.4f}.pkl', 'wb') as f:
 #     pickle.dump(model, f)
 # load model with pickle to predict
@@ -730,10 +728,10 @@ if not DEBUG:
 
 
 #%%
-# with timer('Convert rolling mean for users'):
-#     user_rolling_3_dict = user_rolling_df['user_rolling_3'].to_dict(defaultdict(int))
-#     user_rolling_6_dict = user_rolling_df['user_rolling_6'].to_dict(defaultdict(int))
-#     user_rolling_10_dict = user_rolling_df['user_rolling_10'].to_dict(defaultdict(int))
+with timer('Convert rolling mean for users'):
+    user_rolling_3_dict = user_rolling_df['user_rolling_3'].to_dict(defaultdict(int))
+    user_rolling_6_dict = user_rolling_df['user_rolling_6'].to_dict(defaultdict(int))
+    user_rolling_10_dict = user_rolling_df['user_rolling_10'].to_dict(defaultdict(int))
 # %%
 max_timestamp_u_dict=max_timestamp_u.set_index('user_id').to_dict()
 max_timestamp_u_dict2=max_timestamp_u2.set_index('user_id').to_dict()
@@ -794,14 +792,14 @@ if prior_test_df is not None:
     for user_id, answered_correctly in zip(user_ids, targets):
         user_sum_dict[user_id] += answered_correctly
         user_count_dict[user_id] += 1
-        # if user_id in user_rolling_3_dict.keys():
-        #     # print("updating rolling mean")
-        #     user_rolling_3_dict[user_id] = \
-        #         np.append(user_rolling_3_dict[user_id][1:],answered_correctly>0.5)
-        #     user_rolling_6_dict[user_id] = \
-        #         np.append(user_rolling_6_dict[user_id][1:],answered_correctly>0.5)
-        #     user_rolling_10_dict[user_id] = \
-        #         np.append(user_rolling_10_dict[user_id][1:],answered_correctly>0.5)
+        if user_id in user_rolling_3_dict.keys():
+            # print("updating rolling mean")
+            user_rolling_3_dict[user_id] = \
+                np.append(user_rolling_3_dict[user_id][1:],answered_correctly>0.5)
+            user_rolling_6_dict[user_id] = \
+                np.append(user_rolling_6_dict[user_id][1:],answered_correctly>0.5)
+            user_rolling_10_dict[user_id] = \
+                np.append(user_rolling_10_dict[user_id][1:],answered_correctly>0.5)
         
 #%%
 prior_test_df = test_df.copy() 
@@ -923,14 +921,14 @@ for _, (user_id,
             delta_prior_question_elapsed_time[i]=delta_prior_question_elapsed_time_mean    
             user_prior_question_elapsed_time_dict['prior_question_elapsed_time'].update({user_id:prior_question_elapsed_time})
 
-        # if user_id in user_rolling_3_dict.keys():
-        #     user_rolling_3[i] = sum(user_rolling_3_dict[user_id])
-        #     user_rolling_6[i] = sum(user_rolling_6_dict[user_id])
-        #     user_rolling_10[i] = sum(user_rolling_10_dict[user_id])
-        # else:
-        #     user_rolling_3[i] = round(3*0.66)
-        #     user_rolling_6[i] = round(6*0.66)
-        #     user_rolling_10[i] = round(10*0.66)
+        if user_id in user_rolling_3_dict.keys():
+            user_rolling_3[i] = sum(user_rolling_3_dict[user_id])
+            user_rolling_6[i] = sum(user_rolling_6_dict[user_id])
+            user_rolling_10[i] = sum(user_rolling_10_dict[user_id])
+        else:
+            user_rolling_3[i] = round(3*0.66)
+            user_rolling_6[i] = round(6*0.66)
+            user_rolling_10[i] = round(10*0.66)
         i += 1    
 
 
@@ -958,9 +956,9 @@ test_df['user_correctness'] = user_sum / user_count
 test_df['user_uncorrect_count'] = user_count-user_sum
 test_df['user_correct_count'] =user_sum
 
-# test_df['rolling_3_correctness'] = user_rolling_3
-# test_df['rolling_6_correctness'] = user_rolling_6
-# test_df['rolling_10_correctness'] = user_rolling_10
+test_df['rolling_3_correctness'] = user_rolling_3
+test_df['rolling_6_correctness'] = user_rolling_6
+test_df['rolling_10_correctness'] = user_rolling_10
 
 #test_df['user_answer_count'] =user_count
 
@@ -1046,14 +1044,14 @@ with tqdm(total=len_test) as pbar:
             for user_id, answered_correctly in zip(user_ids, targets):
                 user_sum_dict[user_id] += answered_correctly
                 user_count_dict[user_id] += 1
-                # if user_id in user_rolling_3_dict.keys():
-                #     # print("updating rolling mean")
-                #     user_rolling_3_dict[user_id] = \
-                #         np.append(user_rolling_3_dict[user_id][1:],answered_correctly>0.5)
-                #     user_rolling_6_dict[user_id] = \
-                #         np.append(user_rolling_6_dict[user_id][1:],answered_correctly>0.5)
-                #     user_rolling_10_dict[user_id] = \
-                #         np.append(user_rolling_10_dict[user_id][1:],answered_correctly>0.5)
+                if user_id in user_rolling_3_dict.keys():
+                    # print("updating rolling mean")
+                    user_rolling_3_dict[user_id] = \
+                        np.append(user_rolling_3_dict[user_id][1:],answered_correctly>0.5)
+                    user_rolling_6_dict[user_id] = \
+                        np.append(user_rolling_6_dict[user_id][1:],answered_correctly>0.5)
+                    user_rolling_10_dict[user_id] = \
+                        np.append(user_rolling_10_dict[user_id][1:],answered_correctly>0.5)
                 
 
         prior_test_df = test_df.copy() 
@@ -1154,14 +1152,14 @@ with tqdm(total=len_test) as pbar:
                     delta_prior_question_elapsed_time[i]=delta_prior_question_elapsed_time_mean    
                     user_prior_question_elapsed_time_dict['prior_question_elapsed_time'].update({user_id:prior_question_elapsed_time})
                 
-                # if user_id in user_rolling_3_dict.keys():
-                #     user_rolling_3[i] = sum(user_rolling_3_dict[user_id])
-                #     user_rolling_6[i] = sum(user_rolling_6_dict[user_id])
-                #     user_rolling_10[i] = sum(user_rolling_10_dict[user_id])
-                # else:
-                #     user_rolling_3[i] = round(3*0.66)
-                #     user_rolling_6[i] = round(6*0.66)
-                #     user_rolling_10[i] = round(10*0.66)
+                if user_id in user_rolling_3_dict.keys():
+                    user_rolling_3[i] = sum(user_rolling_3_dict[user_id])
+                    user_rolling_6[i] = sum(user_rolling_6_dict[user_id])
+                    user_rolling_10[i] = sum(user_rolling_10_dict[user_id])
+                else:
+                    user_rolling_3[i] = round(3*0.66)
+                    user_rolling_6[i] = round(6*0.66)
+                    user_rolling_10[i] = round(10*0.66)
                 i += 1 
 
 

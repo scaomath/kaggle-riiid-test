@@ -14,6 +14,7 @@ import torch
 from sklearn.metrics import roc_auc_score
 
 
+SEED = 1127 
 
 def get_size(bytes, suffix="B"):
     """
@@ -66,6 +67,7 @@ def get_seed(s):
     rd.seed(s)
     os.environ['PYTHONHASHSEED'] = str(s)
     np.random.seed(s)
+    pd.core.common.random_state(s)
     # Torch
     torch.manual_seed(s)
     torch.cuda.manual_seed(s)
@@ -74,8 +76,6 @@ def get_seed(s):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(s)
 
-SEED = 1127 
-get_seed(SEED)
 
 # @contextmanager
 # def timer(title):

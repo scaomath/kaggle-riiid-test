@@ -22,6 +22,7 @@ DATA_DIR = HOME+'/data/'
 from utils import *
 from iter_env import *
 get_system()
+get_seed(1227)
 
 pd.set_option('display.max_rows', 150)
 pd.set_option('display.max_columns', 50)
@@ -64,13 +65,13 @@ TRAIN_DTYPES = {
 }
 
 N_FOLD = 1
-NROWS_TRAIN = 12_000_000
+NROWS_TRAIN = 5_000_000
 NROWS_TRAIN_START = 12_000_000
-NROWS_TEST = 25_000
+NROWS_TEST = 50_000
 # MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
 # DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
-DEBUG = True
-TRAIN = True
+DEBUG = False
+TRAIN = False
 # %%
 with timer("Loading train"):
     if DEBUG:
@@ -82,7 +83,7 @@ with timer("Loading train"):
         train_df = pd.read_parquet(DATA_DIR+'cv5_train.parquet',
                                     columns=list(TRAIN_DTYPES.keys()))
         train_df = train_df.astype(TRAIN_DTYPES)
-        train_df = train_df.sample(40_000_000)
+        train_df = train_df[:40_000_000]
 gc.collect()    
 # %%
 
@@ -536,7 +537,7 @@ gc.collect()
 #%%
 users=train_df_clf['user_id'].drop_duplicates()
 
-users=users.sample(frac=0.08)
+users=users.sample(frac=0.05)
 users_df=pd.DataFrame()
 users_df['user_id']=users.values
 
@@ -638,16 +639,17 @@ if TRAIN:
         val_auc = model.best_score['valid_1']['auc']
         model.save_model(MODEL_DIR+f'lgb_base_fold_{i}_auc_{val_auc:.4f}.txt')   
         clfs.append(model)
+    del trains, valids, tr_data, va_data
+    gc.collect()
 else:
     for _ in range(N_FOLD):
-        model = lgb.Booster(model_file=MODEL_DIR+f'lgb.txt')
+        model = lgb.Booster(model_file=MODEL_DIR+f'lgb_base_auc_0.7759.txt')
         clfs.append(model)
 
-del trains, valids, tr_data, va_data
-gc.collect()
+
 #%%
 
-fig,ax = plt.subplots(figsize=(15,15))
+fig,ax = plt.subplots(figsize=(10,20))
 lgb.plot_importance(model, ax=ax,importance_type='gain',max_num_features=50)
 plt.show()
 
@@ -680,9 +682,9 @@ user_lecture_count_dict = user_lecture_agg['count'].astype('int16').to_dict(defa
 
 #lagtime_mean_dict = lagtime_agg['mean'].astype('int32').to_dict(defaultdict(int))
 #del prior_question_elapsed_time_agg
-
-del user_agg, task_container_agg, explanation_agg, user_lecture_agg, #lagtime_agg
-gc.collect()
+if not DEBUG:
+    del user_agg, task_container_agg, explanation_agg, user_lecture_agg, #lagtime_agg
+    gc.collect()
 # %%
 max_timestamp_u_dict=max_timestamp_u.set_index('user_id').to_dict()
 max_timestamp_u_dict2=max_timestamp_u2.set_index('user_id').to_dict()
@@ -691,10 +693,11 @@ user_prior_question_elapsed_time_dict=user_prior_question_elapsed_time.set_index
 
 attempt_no_sum_dict = attempt_no_agg['sum'].to_dict(defaultdict(int))
 
-#del question_elapsed_time_agg
-del max_timestamp_u, max_timestamp_u2, max_timestamp_u3
-del user_prior_question_elapsed_time, attempt_no_agg
-gc.collect()
+if not DEBUG:
+    #del question_elapsed_time_agg
+    del max_timestamp_u, max_timestamp_u2, max_timestamp_u3
+    del user_prior_question_elapsed_time, attempt_no_agg
+    gc.collect()
 # %%
 
 def get_max_attempt(user_id,content_id):
