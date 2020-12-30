@@ -70,7 +70,7 @@ NROWS_TRAIN_START = 12_000_000
 NROWS_TEST = 50_000
 # MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
 # DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
-DEBUG = False
+DEBUG = True
 TRAIN = False
 # %%
 with timer("Loading train"):
@@ -650,7 +650,9 @@ else:
 #%%
 
 fig,ax = plt.subplots(figsize=(10,20))
-lgb.plot_importance(model, ax=ax,importance_type='gain',max_num_features=50)
+lgb.plot_importance(model, ax=ax, 
+                    importance_type='gain',
+                    max_num_features=50)
 plt.show()
 
 # %%

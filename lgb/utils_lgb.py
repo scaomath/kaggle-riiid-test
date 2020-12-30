@@ -30,38 +30,22 @@ import gc
 from contextlib import contextmanager
 
 
-@contextmanager
-def timer(title):
-    t0 = time.time()
-    yield
-    print("{} - done in {:.1f} seconds.\n".format(title, time.time() - t0))
-
-def reduce_mem_usage(df, verbose=True):
-    numerics = ['int16', 'int32', 'int64', 'float16', 'float32', 'float64']
-    start_mem = df.memory_usage().sum() / 1024**2    
-    for col in df.columns:
-        col_type = df[col].dtypes
-        if col_type in numerics:
-            c_min = df[col].min()
-            c_max = df[col].max()
-            if str(col_type)[:3] == 'int':
-                if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:
-                    df[col] = df[col].astype(np.int8)
-                elif c_min > np.iinfo(np.int16).min and c_max < np.iinfo(np.int16).max:
-                    df[col] = df[col].astype(np.int16)
-                elif c_min > np.iinfo(np.int32).min and c_max < np.iinfo(np.int32).max:
-                    df[col] = df[col].astype(np.int32)
-                elif c_min > np.iinfo(np.int64).min and c_max < np.iinfo(np.int64).max:
-                    df[col] = df[col].astype(np.int64)  
-            else:
-                if c_min > np.finfo(np.float32).min and c_max < np.finfo(np.float32).max:
-                    df[col] = df[col].astype(np.float32)
-                else:
-                    df[col] = df[col].astype(np.float64)    
-    end_mem = df.memory_usage().sum() / 1024**2
-    if verbose: print('Mem. usage decreased to {:5.2f} Mb ({:.1f}% reduction)'.format(end_mem, 100 * (start_mem - end_mem) / start_mem))
-    return df
-
+def plot_feature_importance(model, importance_type='gain', num_features=10):
+    feature_importance = model.feature_importance(importance_type=importance_type)
+    feature_importance = pd.DataFrame({'Features': features, 
+                                       'Importance': feature_importance})\
+                         .sort_values('Importance', ascending = False)
+    
+    fig = plt.figure(figsize = (5, 10))
+    fig.suptitle('Feature Importance', fontsize = 20)
+    plt.tick_params(axis = 'x', labelsize = 12)
+    plt.tick_params(axis = 'y', labelsize = 12)
+    plt.xlabel('Importance', fontsize = 15)
+    plt.ylabel('Features', fontsize = 15)
+    sns.barplot(x = feature_importance['Importance'][:num_features], 
+                y = feature_importance['Features'][:num_features], 
+                orient = 'h')
+    plt.show()
 
 
 def group_mean_log_mae(y_true, y_pred, types, floor=1e-9):
@@ -73,8 +57,16 @@ def group_mean_log_mae(y_true, y_pred, types, floor=1e-9):
     return np.log(maes.map(lambda x: max(x, floor))).mean()
     
 
-def train_model_regression(X, X_test, y, params, folds, model_type='lgb', eval_metric='mae', columns=None, plot_feature_importance=False, model=None,
-                               verbose=10000, early_stopping_rounds=200, n_estimators=50000):
+def train_model_regression(X, X_test, y, 
+                           params, folds, 
+                           model_type='lgb', 
+                           eval_metric='mae', 
+                           columns=None, 
+                           plot_feature_importance=False, 
+                           model=None,
+                           verbose=10000, 
+                           early_stopping_rounds=200, 
+                           n_estimators=50000):
     """
     A function to train a variety of regression models.
     Returns dictionary with oof predictions, test predictions, scores and, if necessary, feature importances.
