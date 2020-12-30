@@ -14,7 +14,6 @@ import seaborn as sns
 import torch
 import torch.nn as nn
 from torch import optim
-import torch.nn.utils.rnn as rnn_utils
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 from torch.autograd import Variable
@@ -28,13 +27,10 @@ from tqdm import tqdm
 sns.set()
 DEFAULT_FIG_WIDTH = 20
 sns.set_context("paper", font_scale=1.2) 
-# WORKSPACE_FOLDER=/home/scao/Documents/kaggle-riiid-test
-# PYTHONPATH=${WORKSPACE_FOLDER}:${WORKSPACE_FOLDER}/sakt:${WORKSPACE_FOLDER}/transformer
 
 HOME = os.path.abspath(os.path.join('.', os.pardir))
 print(HOME, '\n\n')
-HOME = "/home/scao/Documents/kaggle-riiid-test/"
-
+# HOME = "/home/scao/Documents/kaggle-riiid-test/"
 MODEL_DIR = os.path.join(HOME,  'model')
 DATA_DIR = os.path.join(HOME,  'data')
 sys.path.append(HOME) 

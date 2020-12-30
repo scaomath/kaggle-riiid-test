@@ -14,7 +14,6 @@ from sklearn.model_selection import train_test_split
 
 import torch
 import torch.nn as nn
-import torch.nn.utils.rnn as rnn_utils
 from torch.autograd import Variable
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import Optimizer
@@ -29,13 +28,8 @@ sns.set_context("paper", font_scale=1.2)
 
 from sakt import *
 from utils import *
+get_system()
 
-print('Python     : ' + sys.version.split('\n')[0])
-print('Numpy      : ' + np.__version__)
-print('Pandas     : ' + pd.__version__)
-print('PyTorch    : ' + torch.__version__)
-DEVICE = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-print(f'Device     : {DEVICE}')
 '''
 https://www.kaggle.com/mpware/sakt-fork
 Self-Attentive model for Knowledge Tracing model (SAKT)
