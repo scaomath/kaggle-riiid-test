@@ -18,18 +18,24 @@ from sklearn.metrics import roc_auc_score
 
 SEED = 1127 
 
-def get_size(bytes, suffix="B"):
-    """
+def get_size(bytes, suffix='B'):
+    ''' 
+    by Fred Cirera,  https://stackoverflow.com/a/1094933/1870254, modified
     Scale bytes to its proper format
     e.g:
-        1253656 => '1.20MB'
-        1253656678 => '1.17GB'
-    """
-    factor = 1024
-    for unit in ["", "K", "M", "G", "T", "P"]:
-        if bytes < factor:
-            return f"{bytes:.2f}{unit}{suffix}"
-        bytes /= factor
+        1253656 => '1.20MiB'
+        1253656678 => '1.17GiB'
+    '''
+    for unit in ['','Ki','Mi','Gi','Ti','Pi','Ei','Zi']:
+        if abs(bytes) < 1024.0:
+            return f"{bytes:3.2f} {unit}{suffix}"
+        bytes /= 1024.0
+    return f"{bytes:3.2f} 'Yi'{suffix}"
+
+def get_file_size(filename):
+    file_size = os.stat(filename)
+    return get_size(file_size.st_size)
+
 
 def get_system():
     print("="*40, "CPU Info", "="*40)
@@ -38,9 +44,9 @@ def get_system():
     print("Total cores       :", psutil.cpu_count(logical=True))
     # CPU frequencies
     cpufreq = psutil.cpu_freq()
-    print(f"Max Frequency    : {cpufreq.max:.2f}Mhz")
-    print(f"Min Frequency    : {cpufreq.min:.2f}Mhz")
-    print(f"Current Frequency: {cpufreq.current:.2f}Mhz")
+    print(f"Max Frequency    : {cpufreq.max:.2f} Mhz")
+    print(f"Min Frequency    : {cpufreq.min:.2f} Mhz")
+    print(f"Current Frequency: {cpufreq.current:.2f} Mhz")
 
     print("="*40, "Memory Info", "="*40)
     # get the memory details
@@ -78,12 +84,11 @@ def get_seed(s):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(s)
 
-
-# @contextmanager
-# def timer(title):
-#     t0 = time()
-#     yield
-#     print("{} - done in {:.1f} seconds.\n".format(title, time() - t0))
+@contextmanager
+def simple_timer(title):
+    t0 = time()
+    yield
+    print("{} - done in {:.1f} seconds.\n".format(title, time() - t0))
 
 class Colors:
     """Defining Color Codes to color the text displayed on terminal.
@@ -92,26 +97,26 @@ class Colors:
     blue = "\033[94m"
     green = "\033[92m"
     yellow = "\033[93m"
+    magenta = "\033[95m"
     red = "\033[91m"
     end = "\033[0m"
 
-
 def color(string: str, color: Colors = Colors.yellow) -> str:
     return f"{color}{string}{Colors.end}"
-
 
 @contextmanager
 def timer(label: str) -> None:
     '''
     https://www.kaggle.com/c/riiid-test-answer-prediction/discussion/203020#1111022
+    print 
+    1. the time the code block takes to run
+    2. the memory usage.
     '''
-    """compute the time the code block takes to run.
-    """
     p = psutil.Process(os.getpid())
     start = time()  # Setup - __enter__
     m0 = p.memory_info()[0] / 2. ** 30
-    print(color(f"{label}: start at {start};"))
-    print(color(f"RAM USAGE AT START: {m0:.2f} GB"))
+    print(color(f"{label}: start at {start};", color=Colors.blue))
+    print(color(f"RAM USAGE AT START: {m0:.2f} GB" , color=Colors.green))
     try:
         yield  # yield to body of `with` statement
     finally:  # Teardown - __exit__
@@ -120,8 +125,31 @@ def timer(label: str) -> None:
         sign = '+' if delta >= 0 else '-'
         delta = math.fabs(delta)
         end = time()
-        print(color(f"{label}:  done at {end} ({end - start:.6f} secs elapsed);", color=Colors.red))
-        print(color(f"RAM USAGE AT END:   {m1:.2f}GB ({sign}{delta:.2f}GB)", color=Colors.red))
+        print(color(f"{label}:  done at {end} ({end - start:.2f} secs elapsed);", color=Colors.blue))
+        print(color(f"RAM USAGE AT END:   {m1:.2f}GB ({sign}{delta:.2f}GB)", color=Colors.green))
+
+
+
+def get_memory(num_var=10):
+    for name, size in sorted(((name, sys.getsizeof(value)) for name, value in globals().items()), key= lambda x: -x[1])[:num_var]:
+        print(color(f"{name:>30}:", color=Colors.green), 
+              color(f"{get_size(size):>8}", color=Colors.magenta))
+
+def find_files(name, path):
+    result = []
+    for root, dirs, files in os.walk(path):
+        for _file in files:
+            if name in _file:
+                result.append(os.path.join(root, _file))
+    return result
+
+def print_file_size(files):
+    for file in files:
+        size=get_file_size(file)
+        filename = file.split('/')[-1]
+        filesize = get_file_size(file)
+        print(color(f"{filename:>30}:", color=Colors.green), 
+              color(f"{filesize:>8}", color=Colors.magenta))
 
 @contextmanager
 def trace(title: str):
@@ -147,14 +175,6 @@ def roc_auc_compute_fn(y_targets, y_preds):
     y_true = y_targets.cpu().numpy()
     y_pred = y_preds.cpu().numpy()
     return roc_auc_score(y_true, y_pred)
-
-def find_files(name, path):
-    result = []
-    for root, dirs, files in os.walk(path):
-        for _file in files:
-            if name in _file:
-                result.append(os.path.join(root, _file))
-    return result
 
 def argmax(lst):
   return lst.index(max(lst))
@@ -195,4 +215,4 @@ def reduce_mem_usage(df, verbose=True):
 
 if __name__ == "__main__":
     get_system()
-    
+    get_memory()
