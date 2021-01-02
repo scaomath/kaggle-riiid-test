@@ -13,10 +13,12 @@ from torch.utils.data import DataLoader, Dataset
 # from torchsummary import summary
 from tqdm import tqdm
 
-HOME =  "/home/scao/Documents/kaggle-riiid-test/"
-MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
-DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
-
+# HOME =  "/home/scao/Documents/kaggle-riiid-test/"
+# MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
+# DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
+HOME = os.path.abspath(os.path.join('.', os.pardir))
+MODEL_DIR = os.path.join(HOME,  'model')
+DATA_DIR = os.path.join(HOME,  'data')
 sys.path.append(HOME)
 from utils import *
 
@@ -85,7 +87,11 @@ else:
     map_location='cpu'
 
 
-def preprocess(df, train_flag=1, label_smoothing=False, smoothing_factor=0.2, label_sm=None):
+def preprocess(df, 
+               train_flag=1, 
+               label_smoothing=False, 
+               smoothing_factor=0.2, 
+               label_smoothed=None):
     '''
     Train: train_flag=1
     Valid: train_flag=2
@@ -93,10 +99,10 @@ def preprocess(df, train_flag=1, label_smoothing=False, smoothing_factor=0.2, la
     '''
     
     if label_smoothing:
-        if label_sm is None:
+        if label_smoothed is None:
             df[TARGET] = df[TARGET]*(1-smoothing_factor) + smoothing_factor/2
         else:
-            df[TARGET] = label_sm
+            df[TARGET] = label_smoothed
 
     df = df[df[CONTENT_TYPE_ID] == False].reset_index(drop = True)    
 
@@ -244,8 +250,8 @@ class SAKTDatasetNew(Dataset):
         seq_len = len(q_)
 
         q = np.zeros(self.max_seq, dtype=int)
-        pqt = np.zeros(self.max_seq, dtype=int)
-        pqe = np.zeros(self.max_seq, dtype=int)
+        pqt = np.zeros(self.max_seq, dtype=int) # prev q elapsed time
+        pqe = np.zeros(self.max_seq, dtype=int) # prev q explained
         qa = np.zeros(self.max_seq, dtype=int)
 
         if seq_len >= self.max_seq:
@@ -291,7 +297,7 @@ class SAKTDatasetNew(Dataset):
 
 
         # x = np.zeros(self.max_seq-1, dtype=int)
-        x = q[:-1].copy() # 0 to 98
+        x = q[:-1].copy() # 0 to max_seq-1 till the previous question
         x += (qa[:-1] == 1) * self.n_skill # y = et + rt x E
 
         return x, target_id,  label,  prior_q_time,  prior_q_explain

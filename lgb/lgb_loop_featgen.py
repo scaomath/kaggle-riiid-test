@@ -72,7 +72,7 @@ if DEBUG:
     NROWS_VAL = 1_000_000
 else:
     NROWS_TEST = 25_000
-    NROWS_TRAIN = 90_000_000
+    NROWS_TRAIN = 100_000_000
     NROWS_VAL = 1_000_000
 # %%
 train_parquet = DATA_DIR+'cv2_train.parquet'
@@ -101,7 +101,7 @@ train['prior_question_elapsed_time'].fillna(prior_question_elapsed_time_mean,
 gc.collect()
 # %%
 # Funcion for user stats with loops
-def add_features_train(row):
+def get_features_row(row):
     
     '''
     after re-assignment
@@ -215,6 +215,23 @@ def add_features_train(row):
     # Question features updates
     answered_correctly_q_sum[row[2]] += row[1]
     # ------------------------------------------------------------------
+
+
+
+def add_features_df(df):
+    user_df = pd.DataFrame({'answered_correctly_u_avg': answered_correctly_u_avg, 
+                        'elapsed_time_u_avg': elapsed_time_u_avg, 
+                        'explanation_u_avg': explanation_u_avg, 
+                        'answered_correctly_q_avg': answered_correctly_q_avg, 
+                        'elapsed_time_q_avg': elapsed_time_q_avg, 
+                        'explanation_q_avg': explanation_q_avg, 
+                        'answered_correctly_uq_count': answered_correctly_uq_count, 
+                        'timestamp_u_recency_1': timestamp_u_recency_1, 
+                        'timestamp_u_recency_2': timestamp_u_recency_2,
+                        'timestamp_u_recency_3': timestamp_u_recency_3, 
+                        'timestamp_u_incorrect_recency': timestamp_u_incorrect_recency})
+    
+    df = pd.concat([df, user_df], axis = 1)
 # %%
 train_len = len(train)
 
@@ -263,8 +280,15 @@ iters = train[['user_id',
 
 with timer("User feature calculation"):
     for _row in tqdm(iters, total=train_len):
-        add_features_train(_row)
+        get_features_row(_row)
 gc.collect()
+
+add_features_df(train)
+
+#%% export train with features
+
+
+
 # %%
 with open(DATA_DIR+'answered_correctly_u_count.pickle', 'wb') as f:
     pickle.dump(answered_correctly_u_count, f, protocol=pickle.HIGHEST_PROTOCOL)   
@@ -303,4 +327,12 @@ for num, row in enumerate(train[['user_id']].values):
     
 with open(DATA_DIR+'answered_correctly_uq_dict.pickle', 'wb') as f:
     pickle.dump(answered_correctly_uq_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
+# %%
+
+with open(DATA_DIR+'answered_correctly_uq_dict.pickle', 'rb') as f:
+    answered_correctly_uq_dict = pickle.load(f)
+with timer("Loading user-question dict"):
+    answered_correctly_uq = defaultdict(lambda: defaultdict(int))
+    for key in answered_correctly_uq_dict.keys():
+        answered_correctly_uq[key] = answered_correctly_uq_dict[key]
 # %%

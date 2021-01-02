@@ -1,9 +1,9 @@
 # Kaggle Riiid Test Answer Correctness
-Playground for Kaggle competition Riiid! Answer Correctness Prediction
+Playground for [Kaggle competition Riiid! Answer Correctness Prediction](https://www.kaggle.com/c/riiid-test-answer-prediction)
 
 ## EDA and ideas
 
-- In the CV tito and marisakamozz proposed, the test iterator df is sorted by `irtual_timestamp`, which is nice.
+- In the CV tito and marisakamozz proposed, the test iterator df is sorted by `virtual_timestamp`, which is nice.
 - Currently many features do `fillna` using the mean for all users, how about the `fillna` just for one user? 
 - How to address the fact that a random guess would yield 25% correct rate?
 - How to do cross-validation using a `KFold` or a stratified folds in the current setting?
@@ -49,8 +49,8 @@ If there is layer normalization, multiplying with a scaling factor does not matt
 
 TO-DO:
 - [x] Test label smoothing using (a) a simple label change, then multiply a factor to the prediction. Does not work well.
-- [ ] Testing add a `previous_answers_correct` embedding
-- [ ] Testing adding a "User growth" feature to the embedding...
+- [x] Testing add a separate `previous_answers_correct` embedding
+- [ ] Testing adding a "User growth" feature to the embedding...(maybe not very good as the attention-based model should be more automatic)
 - [ ] Using a multitarget with the second target being the LGBM oof-prediction/other things.
 
 
@@ -64,7 +64,7 @@ TO-DO:
 
 - (Dec 26) Added `rolling_mean` for target shifted by 1 (i.e., previous question correct or not). iter_env CV: 0.7477 (y runs of 50k rows in `cv5_valid`), LB 0.766
 
-
+- (Dec 29) First full model submit. LB 0.776.
 
 ### Features TO-DO:
 

@@ -67,9 +67,9 @@ def get_system():
         print("="*40, "GPU Info", "="*40)
         print(f'Device     : {device}')
         print(torch.cuda.get_device_name(0))
+        print(f"{'Mem total': <15}: {round(torch.cuda.get_device_properties(0).total_memory/1024**3,1)} GB")
         print(f"{'Mem allocated': <15}: {round(torch.cuda.memory_allocated(0)/1024**3,1)} GB")
         print(f"{'Mem cached': <15}: {round(torch.cuda.memory_reserved(0)/1024**3,1)} GB")
-    
 
 def get_seed(s):
     rd.seed(s)
