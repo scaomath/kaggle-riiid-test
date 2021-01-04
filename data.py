@@ -55,9 +55,12 @@ def main_sakt():
     '''
     get the user group for sakt model baseline
     '''
+    print('\n')
     with timer("Loading train"):
         data_df = pd.read_csv(os.path.join(DATA_DIR, 'train.csv'), 
                             usecols=TRAIN_COLS, dtype=TRAIN_DTYPES)
+        # data_df = pd.read_parquet(os.path.join(DATA_DIR, 'cv2_train.parquet'),
+        #                         columns=list(TRAIN_DTYPES.keys())).astype(TRAIN_DTYPES)
     print('\n')
     with timer("Processing train"):
         data_df = data_df[data_df[CONTENT_TYPE_ID] == False]
