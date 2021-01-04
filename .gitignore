@@ -6,3 +6,4 @@ __pycache__/
 *.txt
 *.zip
 *.pkl
+*.pth

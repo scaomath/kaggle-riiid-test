@@ -52,6 +52,9 @@ features encoding:
 '''
 DEBUG = True
 TRAIN = False
+PREPROCESS = False
+
+TEST_SIZE = 0.05
 
 NUM_SKILLS = 13523 # number of problems
 MAX_SEQ = 180
@@ -101,22 +104,28 @@ else:
     NROWS_TRAIN = 50_000_000
     NROWS_VAL = 2_000_000
 # %%
-with timer("Loading train from parquet"):
-    train_df = pd.read_parquet(os.path.join(DATA_DIR, 'cv5_train.parquet'),
-                            columns=list(TRAIN_DTYPES.keys())).astype(TRAIN_DTYPES)
-    valid_df = pd.read_parquet(os.path.join(DATA_DIR, 'cv5_valid.parquet'),
-                            columns=list(TRAIN_DTYPES.keys())).astype(TRAIN_DTYPES)
+if PREPROCESS:
+    with timer("Loading train from parquet"):
+        train_df = pd.read_parquet(os.path.join(DATA_DIR, 'cv5_train.parquet'),
+                                columns=list(TRAIN_DTYPES.keys())).astype(TRAIN_DTYPES)
+        valid_df = pd.read_parquet(os.path.join(DATA_DIR, 'cv5_valid.parquet'),
+                                columns=list(TRAIN_DTYPES.keys())).astype(TRAIN_DTYPES)
 
-if DEBUG:
-    train_df = train_df[:NROWS_TRAIN]
-    valid_df = valid_df[:NROWS_VAL]
+    if DEBUG:
+        train_df = train_df[:NROWS_TRAIN]
+        valid_df = valid_df[:NROWS_VAL]
 
-with timer("Processing train"):
-    train_group = preprocess(train_df)
-    valid_group = preprocess(valid_df, train_flag=2)
+    with timer("Processing train"):
+        train_group = preprocess(train_df)
+        valid_group = preprocess(valid_df, train_flag=2)
+else:
+    with open(os.path.join(DATA_DIR, 'sakt_group.pickle'), 'rb') as f:
+        group = pickle.load(f)
+    train_group, valid_group = train_test_split(group, test_size = TEST_SIZE, random_state=SEED)
 
-print("valid:", valid_df.shape, "users:", valid_df[USER_ID].nunique())
-print("train:", train_df.shape, "users:", train_df[USER_ID].nunique())
+
+print(f"valid users: {len(valid_group.keys())}")
+print(f"train users: {len(train_group.keys())}")
 # %%
 
 class SAKTDataset(Dataset):
