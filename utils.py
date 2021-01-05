@@ -71,7 +71,7 @@ def get_system():
         print(f"{'Mem allocated': <15}: {round(torch.cuda.memory_allocated(0)/1024**3,1)} GB")
         print(f"{'Mem cached': <15}: {round(torch.cuda.memory_reserved(0)/1024**3,1)} GB")
     
-    print("="*40, "system info print done", "="*40)
+    print("="*38, "system info print done", "="*38)
 
 def get_seed(s):
     rd.seed(s)

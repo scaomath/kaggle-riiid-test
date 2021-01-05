@@ -51,18 +51,24 @@ TRAIN_DTYPES = {TIMESTAMP: 'int64',
          PRIOR_QUESTION_TIME: np.float32,
          PRIOR_QUESTION_EXPLAIN: 'boolean'}
 
-def main_sakt():
+def main_sakt(data_name = 'train.csv'):
     '''
     get the user group for sakt model baseline
+        
+    data_name = 'cv2_train.parquet'
+    data_name = 'cv2_valid.parquet'
     '''
+    filename = data_name.split('.')[0]
     print('\n')
-    with timer("Loading train"):
-        data_df = pd.read_csv(os.path.join(DATA_DIR, 'train.csv'), 
-                            usecols=TRAIN_COLS, dtype=TRAIN_DTYPES)
+    with timer("Loading data"):
+        # data_df = pd.read_csv(os.path.join(DATA_DIR, 'train.csv'), 
+        #                     usecols=TRAIN_COLS, dtype=TRAIN_DTYPES)
         # data_df = pd.read_parquet(os.path.join(DATA_DIR, 'cv2_train.parquet'),
         #                         columns=list(TRAIN_DTYPES.keys())).astype(TRAIN_DTYPES)
+        data_df = pd.read_parquet(os.path.join(DATA_DIR, data_name),
+                                columns=list(TRAIN_DTYPES.keys())).astype(TRAIN_DTYPES)
     print('\n')
-    with timer("Processing train"):
+    with timer("Processing data"):
         data_df = data_df[data_df[CONTENT_TYPE_ID] == False]
         data_df = data_df.sort_values([TIMESTAMP], ascending=True).reset_index(drop = True)
         group = data_df[[USER_ID, CONTENT_ID, TARGET]]\
@@ -71,10 +77,10 @@ def main_sakt():
                                     r[TARGET].values))
     print('\n')
     with timer("Dumping user group to pickle"):
-        with open(os.path.join(DATA_DIR, 'sakt_group.pickle'), 'wb') as f:
+        with open(os.path.join(DATA_DIR, f'sakt_group_{filename}.pickle'), 'wb') as f:
             pickle.dump(group, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 if __name__ == "__main__":
-    main_sakt()
+    main_sakt('cv2_valid.parquet')
 
 # %%

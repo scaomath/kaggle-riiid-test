@@ -636,6 +636,10 @@ class SAKTMulti(nn.Module):
         return x.squeeze(-1), [att_weight1]
 
 def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
+    '''
+    Original training strategy
+    overfitting in some sense
+    '''
     model.train()
 
     train_loss = []

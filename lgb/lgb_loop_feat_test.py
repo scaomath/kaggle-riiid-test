@@ -84,8 +84,8 @@ else:
 
 
 #%%
-train_parquet = DATA_DIR+'cv5_train.parquet'
-valid_parquet = DATA_DIR+'cv5_valid.parquet'
+train_parquet = DATA_DIR+'cv2_train.parquet'
+valid_parquet = DATA_DIR+'cv2_valid.parquet'
 question_file = DATA_DIR+'questions.csv'
 
 # Read data
@@ -168,6 +168,11 @@ def add_features_new(all_data,
                     answered_correctly_uq_dict,
                     part_user_count_dict,
                     part_user_sum_dict,
+                    timestamp_u_correct_dict,
+                    timestamp_u_incorrect_dict,
+                    timestamp_u_dict,
+                    user_tag_acc_count_dict,
+                    user_tag_acc_sum_dict,
                     update=True):
     # user features
     len_data = len(all_data)

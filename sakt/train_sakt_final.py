@@ -1,4 +1,4 @@
-#%%
+#%% final model of sakt
 import os
 import gc
 import sys
@@ -24,11 +24,6 @@ from torch.optim.lr_scheduler import (CosineAnnealingWarmRestarts, CyclicLR, One
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-sns.set()
-DEFAULT_FIG_WIDTH = 20
-sns.set_context("paper", font_scale=1.2) 
-# WORKSPACE_FOLDER=/home/scao/Documents/kaggle-riiid-test
-# PYTHONPATH=${WORKSPACE_FOLDER}:${WORKSPACE_FOLDER}/sakt:${WORKSPACE_FOLDER}/transformer
 HOME = os.path.abspath(os.path.join('.', os.pardir))
 print(HOME, '\n\n')
 # HOME = "/home/scao/Documents/kaggle-riiid-test/"
@@ -37,99 +32,39 @@ DATA_DIR = os.path.join(HOME,  'data')
 sys.path.append(HOME) 
 from utils import *
 get_system()
-from sakt import *
 from iter_env import *
-
-# from transformer_optimizers import *
 # %%
-
-'''
-TO-DO:
-features encoding:
-1 how to address the problem with previous answers correctly not uniformly predicted
-2 question tags 
-'''
 DEBUG = True
-TRAIN = False
+TRAIN = True
 PREPROCESS = False
 
-TEST_SIZE = 0.05
+TEST_SIZE = 0.05 # un-used
 
 NUM_SKILLS = 13523 # number of problems
 MAX_SEQ = 180
 ACCEPTED_USER_CONTENT_SIZE = 4
 EMBED_SIZE = 128
+RECENT_SIZE = 12 # recent data in the training loop
 NUM_HEADS = 8
-BATCH_SIZE = 64
+BATCH_SIZE = 128
 VAL_BATCH_SIZE = 2048
-DEBUG_TEST_SIZE = 2500
+DEBUG_TEST_SIZE = 10_000
+TEST_SIZE = 25_000
 DROPOUT = 0.1
 SEED = 1127
 
 get_seed(SEED)
 
-'''
-Columns placeholder and preprocessing params
-'''
-CONTENT_TYPE_ID = "content_type_id"
-CONTENT_ID = "content_id"
-TARGET = "answered_correctly"
-USER_ID = "user_id"
-PRIOR_QUESTION_TIME = 'prior_question_elapsed_time'
-
-PRIOR_QUESTION_EXPLAIN = 'prior_question_had_explanation'
-TASK_CONTAINER_ID = "task_container_id"
-TIMESTAMP = "timestamp" 
-ROW_ID = 'row_id'
-FILLNA_VAL = 14_000 # for prior question elapsed time, rounded average in train
-TIME_SCALING = 1000 # scaling down the prior question elapsed time
-
-TRAIN_COLS = [TIMESTAMP, USER_ID, CONTENT_ID, CONTENT_TYPE_ID, TARGET]
-TRAIN_COLS_NEW = [TIMESTAMP, USER_ID, CONTENT_ID, CONTENT_TYPE_ID, 
-             TARGET, PRIOR_QUESTION_TIME, PRIOR_QUESTION_EXPLAIN]
-
-TRAIN_DTYPES = {TIMESTAMP: 'int64', 
-         USER_ID: 'int32', 
-         CONTENT_ID: 'int16',
-         CONTENT_TYPE_ID: 'bool',
-         TARGET:'int8',
-         PRIOR_QUESTION_TIME: np.float32,
-         PRIOR_QUESTION_EXPLAIN: 'boolean'}
-
-
-if DEBUG:
-    NROWS_TEST = 25_000
-    NROWS_TRAIN = 5_000_000
-    NROWS_VAL = 500_000
-else:
-    NROWS_TEST = 250_000
-    NROWS_TRAIN = 50_000_000
-    NROWS_VAL = 2_000_000
-# %%
-if PREPROCESS:
-    with timer("Loading train from parquet"):
-        train_df = pd.read_parquet(os.path.join(DATA_DIR, 'cv2_train.parquet'),
-                                columns=list(TRAIN_DTYPES.keys())).astype(TRAIN_DTYPES)
-        valid_df = pd.read_parquet(os.path.join(DATA_DIR, 'cv2_valid.parquet'),
-                                columns=list(TRAIN_DTYPES.keys())).astype(TRAIN_DTYPES)
-
-    if DEBUG:
-        train_df = train_df[:NROWS_TRAIN]
-        valid_df = valid_df[:NROWS_VAL]
-
-    with timer("Processing train"):
-        train_group = preprocess(train_df)
-        valid_group = preprocess(valid_df, train_flag=2)
-else:
-    with open(os.path.join(DATA_DIR, 'sakt_group_cv2.pickle'), 'rb') as f:
+#%%
+with timer("Loading train and valid"):
+    # with open(os.path.join(DATA_DIR, 'sakt_group_cv2.pickle'), 'rb') as f:
+    #         train_group = pickle.load(f)
+    # with open(os.path.join(DATA_DIR, 'sakt_group_cv2_valid.pickle'), 'rb') as f:
+    #         valid_group = pickle.load(f)
+    with open(os.path.join(DATA_DIR, 'sakt_group.pickle'), 'rb') as f:
         group = pickle.load(f)
     train_group, valid_group = train_test_split(group, test_size = TEST_SIZE, random_state=SEED)
-
-
-print(f"valid users: {len(valid_group.keys())}")
-print(f"train users: {len(train_group.keys())}")
-# %%
-
+#%%
 class SAKTDataset(Dataset):
     def __init__(self, group, n_skill, max_seq=MAX_SEQ):
         super(SAKTDataset, self).__init__()
@@ -158,7 +93,67 @@ class SAKTDataset(Dataset):
                     index = f'{user_id}'
                     self.user_ids.append(index)
                     self.samples[index] = (content_id, answered_correctly)
-                
+            '''
+            New: adding a shifted sequence
+            '''
+            if len(content_id) >= RECENT_SIZE: #
+                for i in range(RECENT_SIZE//2):
+                    '''
+                    generating much much more sequences by truncating
+                    '''
+                    content_id_truncated_end = content_id[:-i]
+                    answered_correctly_truncated_end = answered_correctly[:-i]
+                    if len(content_id_truncated_end) >= ACCEPTED_USER_CONTENT_SIZE:
+                        if len(content_id_truncated_end) > self.max_seq:
+                            total_questions_2 = len(content_id_truncated_end)
+                            last_pos = total_questions_2 // self.max_seq
+                            for seq in range(last_pos):
+                                index = f"{user_id}_{seq}_{i}_2"
+                                self.user_ids.append(index)
+                                start = seq * self.max_seq
+                                end = (seq + 1) * self.max_seq
+                                self.samples[index] = (content_id_truncated_end[start:end], 
+                                                    answered_correctly_truncated_end[start:end])
+                            if len(content_id_truncated_end[end:]) >= ACCEPTED_USER_CONTENT_SIZE:
+                                index = f"{user_id}_{last_pos + 1}_{i}_2"
+                                self.user_ids.append(index)
+                                self.samples[index] = (content_id_truncated_end[end:], 
+                                                    answered_correctly_truncated_end[end:])
+                        else:
+                            index = f'{user_id}_{i}_2'
+                            self.user_ids.append(index)
+                            self.samples[index] = (content_id_truncated_end, 
+                                                   answered_correctly_truncated_end)
+
+
+                    '''
+                    Truncating the started
+                    '''
+                    content_id_truncated_start = content_id[i:]
+                    answered_correctly_truncated_start = answered_correctly[i:]
+
+                    if len(content_id_truncated_start) >= ACCEPTED_USER_CONTENT_SIZE:
+                        if len(content_id_truncated_start) > self.max_seq:
+                            total_questions_1 = len(content_id_truncated_start)
+                            last_pos = total_questions_1 // self.max_seq
+                            for seq in range(last_pos):
+                                index = f"{user_id}_{seq}_{i}_1"
+                                self.user_ids.append(index)
+                                start = seq * self.max_seq
+                                end = (seq + 1) * self.max_seq
+                                self.samples[index] = (content_id_truncated_start[start:end], 
+                                                    answered_correctly_truncated_start[start:end])
+                            if len(content_id_truncated_start[end:]) >= ACCEPTED_USER_CONTENT_SIZE:
+                                index = f"{user_id}_{last_pos + 1}_{i}_1"
+                                self.user_ids.append(index)
+                                self.samples[index] = (content_id_truncated_start[end:], 
+                                                    answered_correctly_truncated_start[end:])
+                        else:
+                            index = f'{user_id}_{i}_1'
+                            self.user_ids.append(index)
+                            self.samples[index] = (content_id_truncated_start, 
+                                                   answered_correctly_truncated_start)
+
                 
     def __len__(self):
         return len(self.user_ids)
@@ -170,6 +165,7 @@ class SAKTDataset(Dataset):
         
         content_id_seq = np.zeros(self.max_seq, dtype=int)
         answered_correctly_seq = np.zeros(self.max_seq, dtype=int)
+
         if seq_len >= self.max_seq:
             content_id_seq[:] = content_id[-self.max_seq:]
             answered_correctly_seq[:] = answered_correctly[-self.max_seq:]
@@ -177,7 +173,7 @@ class SAKTDataset(Dataset):
             content_id_seq[-seq_len:] = content_id
             answered_correctly_seq[-seq_len:] = answered_correctly
             
-        target_id = content_id_seq[1:] # question till the current one
+        target_id = content_id_seq[1:] # question including the current one
         label = answered_correctly_seq[1:]
         
         x = content_id_seq[:-1].copy() # question till the previous one
@@ -185,55 +181,62 @@ class SAKTDataset(Dataset):
         x += (answered_correctly_seq[:-1] == 1) * self.n_skill
         
         return x, target_id, label
+
+
+class TestDataset(Dataset):
+    def __init__(self, samples, test_df, n_skill, max_seq=100):
+        super(TestDataset, self).__init__()
+        self.samples = samples
+        self.user_ids = [x for x in test_df["user_id"].unique()]
+        self.test_df = test_df
+        self.n_skill, self.max_seq = n_skill, max_seq
+
+    def __len__(self):
+        return self.test_df.shape[0]
+    
+    def __getitem__(self, index):
+        test_info = self.test_df.iloc[index]
+        
+        user_id = test_info['user_id']
+        target_id = test_info['content_id']
+        
+        content_id_seq = np.zeros(self.max_seq, dtype=int)
+        answered_correctly_seq = np.zeros(self.max_seq, dtype=int)
+        
+        if user_id in self.samples.index:
+            content_id, answered_correctly = self.samples[user_id]
+            
+            seq_len = len(content_id)
+            
+            if seq_len >= self.max_seq:
+                content_id_seq = content_id[-self.max_seq:]
+                answered_correctly_seq = answered_correctly[-self.max_seq:]
+            else:
+                content_id_seq[-seq_len:] = content_id
+                answered_correctly_seq[-seq_len:] = answered_correctly
+                
+        x = content_id_seq[1:].copy()
+        x += (answered_correctly_seq[1:] == 1) * self.n_skill
+        
+        questions = np.append(content_id_seq[2:], [target_id])
+        
+        return x, questions
 # %%
 train_dataset = SAKTDataset(train_group, n_skill=NUM_SKILLS, max_seq=MAX_SEQ)
 train_dataloader = DataLoader(train_dataset, 
-                                batch_size=BATCH_SIZE, 
-                                shuffle=True, 
-                                drop_last=True)
+                        batch_size=BATCH_SIZE, 
+                        shuffle=True, 
+                        drop_last=True)
 
 
 val_dataset = SAKTDataset(valid_group, n_skill=NUM_SKILLS, max_seq=MAX_SEQ)
 val_dataloader = DataLoader(val_dataset, 
-                            batch_size=VAL_BATCH_SIZE, 
-                            shuffle=False)
-print(f"Length of the train loader is {len(train_dataloader)}")
-#%%
-sample_batch = next(iter(train_dataloader))
-sample_batch[0].shape, sample_batch[1].shape, sample_batch[2].shape
+                        batch_size=VAL_BATCH_SIZE, 
+                        shuffle=False)
 # %%
-'''
-Debugging
-'''
-content_id, answered_correctly = train_group[train_group.keys()[0]]
-seq_len = len(content_id)
-content_id_seq = np.zeros(MAX_SEQ, dtype=int)
-answered_correctly_seq = np.zeros(MAX_SEQ, dtype=int)
-if seq_len >= MAX_SEQ:
-    content_id_seq[:] = content_id[-MAX_SEQ:]
-    answered_correctly_seq[:] = answered_correctly[-MAX_SEQ:]
-else:
-    content_id_seq[-seq_len:] = content_id
-    answered_correctly_seq[-seq_len:] = answered_correctly
-
-# question till the current one, should be the same with sample_batch[1][0]
-target_id = content_id_seq[1:] 
-#  whether answered correctly, same with sample_batch[2][0]
-label = answered_correctly_seq[1:] #
-x = content_id_seq[:-1].copy() # question till the previous one
-# encoded answers till the previous question
-# if a user answered correctly it is added 13523
-x += (answered_correctly_seq[:-1] == 1) * NUM_SKILLS
-# %% Merging questions
-
-# questions_df = pd.read_csv(os.path.join(DATA_DIR, 'questions.csv'))
-# questions_df['part'] = questions_df['part'].astype(np.int32)
-# questions_df['bundle_id'] = questions_df['bundle_id'].astype(np.int32)
-
-# train_debug = pd.merge(train_df, questions_df[['question_id', 'part']], 
-#                  left_on = 'content_id', right_on = 'question_id', how = 'left')
-# %% model
-
+sample_batch = next(iter(train_dataloader))
+print(sample_batch[0].shape, sample_batch[1].shape, sample_batch[2].shape)
+# %%
 class FFN(nn.Module):
     def __init__(self, state_size = MAX_SEQ, 
                     forward_expansion = 1, 
@@ -339,96 +342,139 @@ class SAKTModel(nn.Module):
         x = self.pred(x)
         return x.squeeze(-1), att_weight
 
-
-class TestDataset(Dataset):
-    def __init__(self, samples, test_df, n_skill, max_seq=100):
-        super(TestDataset, self).__init__()
-        self.samples = samples
-        self.user_ids = [x for x in test_df["user_id"].unique()]
-        self.test_df = test_df
-        self.n_skill, self.max_seq = n_skill, max_seq
-
-    def __len__(self):
-        return self.test_df.shape[0]
-    
-    def __getitem__(self, index):
-        test_info = self.test_df.iloc[index]
-        
-        user_id = test_info['user_id']
-        target_id = test_info['content_id']
-        
-        content_id_seq = np.zeros(self.max_seq, dtype=int)
-        answered_correctly_seq = np.zeros(self.max_seq, dtype=int)
-        
-        if user_id in self.samples.index:
-            content_id, answered_correctly = self.samples[user_id]
-            
-            seq_len = len(content_id)
-            
-            if seq_len >= self.max_seq:
-                content_id_seq = content_id[-self.max_seq:]
-                answered_correctly_seq = answered_correctly[-self.max_seq:]
-            else:
-                content_id_seq[-seq_len:] = content_id
-                answered_correctly_seq[-seq_len:] = answered_correctly
-                
-        x = content_id_seq[1:].copy()
-        x += (answered_correctly_seq[1:] == 1) * self.n_skill
-        
-        questions = np.append(content_id_seq[2:], [target_id])
-        
-        return x, questions
-# %% Loading models
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f'\nUsing device: {device}')
-model_file = MODEL_DIR+'sakt_seq_180_auc_0.7689.pth'
-model = SAKTModel(n_skill=NUM_SKILLS, 
+#%%
+model = SAKTModel(NUM_SKILLS, 
                   max_seq=MAX_SEQ, 
                   embed_dim=EMBED_SIZE, 
                   forward_expansion=1, 
                   enc_layers=1, 
                   heads=NUM_HEADS, 
                   dropout=DROPOUT)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 n_params = get_num_params(model)
 print(f"Current model has {n_params} parameters.")
+
+# %%
+def load_from_item(item):
+    x = item[0].to(device).long()
+    target_id = item[1].to(device).long()
+    label = item[2].to(device).float()
+    target_mask = (target_id != 0)
+    return x, target_id, label, target_mask
+
+def update_stats(tbar, train_loss, loss, output, label, num_corrects, num_total, labels, outs):
+    train_loss.append(loss.item())
+    pred = (torch.sigmoid(output) >= 0.5).long()
+    num_corrects += (pred == label).sum().item()
+    num_total += len(label)
+    labels.extend(label.view(-1).data.cpu().numpy())
+    outs.extend(output.view(-1).data.cpu().numpy())
+    tbar.set_description('loss - {:.4f}'.format(loss))
+    return num_corrects, num_total
+
+def train_epoch(model, dataloader, optim, criterion, scheduler, device="cpu"):
+    model.train()
+    
+    train_loss = []
+    num_corrects = 0
+    num_total = 0
+    labels = []
+    outs = []
+    
+    tbar = tqdm(dataloader)
+    for item in tbar:
+        x, target_id, label, target_mask = load_from_item(item)
         
-model = model.to(device)
-model.load_state_dict(torch.load(model_file, map_location=device))
-#%% Loading mock test set
+        optim.zero_grad()
+        output, _ = model(x, target_id)
+        
+        output = torch.masked_select(output, target_mask)
+        label = torch.masked_select(label, target_mask)
+        
+        loss = criterion(output, label)
+        loss.backward()
+        optim.step()
+        scheduler.step()
+        
+        tbar.set_description('loss - {:.4f}'.format(loss))
+
+def val_epoch(model, val_iterator, criterion, device="cpu"):
+    model.eval()
+
+    train_loss = []
+    num_corrects = 0
+    num_total = 0
+    labels = []
+    outs = []
+
+    tbar = tqdm(val_iterator)
+    for item in tbar:
+        x, target_id, label, target_mask = load_from_item(item)
+
+        with torch.no_grad():
+            output, atten_weight = model(x, target_id)
+        
+        output = torch.masked_select(output, target_mask)
+        label = torch.masked_select(label, target_mask)
+
+        loss = criterion(output, label)
+        
+        num_corrects, num_total = update_stats(tbar, 
+                                               train_loss, 
+                                               loss, 
+                                               output, 
+                                               label, 
+                                               num_corrects, 
+                                               num_total, 
+                                               labels, 
+                                               outs)
+
+    acc = num_corrects / num_total
+    auc = roc_auc_score(labels, outs)
+    loss = np.average(train_loss)
+
+    return loss, acc, auc
+
+def do_train(lr=1e-3, epochs=10):
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    criterion = nn.BCEWithLogitsLoss()
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=lr, 
+                                                    steps_per_epoch=len(train_dataloader), 
+                                                    epochs=epochs)
+    model.to(device)
+    criterion.to(device)
+    best_auc = 0.0
+    for epoch in range(epochs):
+        train_epoch(model, train_dataloader, optimizer, criterion, scheduler, device)
+        val_loss, val_acc, val_auc = val_epoch(model, val_dataloader, criterion, device)
+        print(f"\nepoch - {epoch + 1} val_loss - {val_loss:.3f} acc - {val_acc:.3f} auc - {val_auc:.3f}")
+        if best_auc < val_auc:
+            print(f'epoch - {epoch + 1} best model with val auc: {val_auc}')
+            best_auc = val_auc
+            torch.save(model.state_dict(), os.path.join(MODEL_DIR, f'sakt_seq_{MAX_SEQ}_auc_{val_auc:.4f}.pt'))
+# %%
+LR = 1e-3
+EPOCHS = 10
+do_train(lr=LR, epochs=EPOCHS)
+# %%
 with timer("Loading private simulated test set"):
-    all_test_df = pd.read_parquet(DATA_DIR+'cv2_valid.parquet')
+    all_test_df = pd.read_parquet(os.path.join(DATA_DIR,'cv5_valid.parquet'))
     all_test_df = all_test_df[:DEBUG_TEST_SIZE]
 
-all_test_df['answer_correctly_true'] = all_test_df[TARGET]
-# %% mock test
+# %%
+
+iter_test = Iter_Valid(all_test_df, max_user=1000)
+prev_test_df = None
+prev_group = None
 predicted = []
+
 def set_predict(df):
     predicted.append(df)
-
-# reload all user group for cv2
-with timer('loading cv2'):
-    with open(os.path.join(DATA_DIR, 'sakt_group_cv2.pickle'), 'rb') as f:
-        group = pickle.load(f)
-
-#%%
-def iter_env_run(all_test_df, n_iter=1):
-    '''
-    Running mock test for n_iter iterations using tito's iter_env simulator and cv2_train user group.
-    '''
-    iter_test = Iter_Valid(all_test_df, max_user=1000)
-    prev_test_df = None
-    prev_group = None
-    batch_user_ids = []
-
-    # reload all user group for cv2
-    with open(os.path.join(DATA_DIR, 'sakt_group_cv2.pickle'), 'rb') as f:
-        group = pickle.load(f)
-
-    for _ in range(n_iter):
-    
-        test_df, sample_prediction_df = next(iter_test)
-
+# %%
+with tqdm(total=len(all_test_df)) as pbar:
+    for idx, (test_df, sample_prediction_df) in enumerate(iter_test):
+        
         if prev_test_df is not None:
             prev_test_df['answered_correctly'] = eval(test_df['prior_group_answers_correct'].iloc[0])
             prev_test_df = prev_test_df[prev_test_df.content_type_id == False]
@@ -444,75 +490,36 @@ def iter_env_run(all_test_df, n_iter=1):
                                         np.append(group[prev_user_id][1], prev_group_answered_correctly))
                 else:
                     group[prev_user_id] = (prev_group_content, prev_group_answered_correctly)
-
+                
                 if len(group[prev_user_id][0]) > MAX_SEQ:
                     new_group_content = group[prev_user_id][0][-MAX_SEQ:]
                     new_group_answered_correctly = group[prev_user_id][1][-MAX_SEQ:]
                     group[prev_user_id] = (new_group_content, new_group_answered_correctly)
-
+                    
         prev_test_df = test_df.copy()
         test_df = test_df[test_df.content_type_id == False]
-
-        batch_user_ids.append(test_df.user_id.unique())
-
+        
         test_dataset = TestDataset(group, test_df, NUM_SKILLS, max_seq=MAX_SEQ)
         test_dataloader = DataLoader(test_dataset, batch_size=len(test_df), shuffle=False)
-
+        
         item = next(iter(test_dataloader))
         x = item[0].to(device).long()
         target_id = item[1].to(device).long()
-
+        
         with torch.no_grad():
             output, _ = model(x, target_id)
-
+            
         output = torch.sigmoid(output)
         preds = output[:, -1]
         test_df['answered_correctly'] = preds.cpu().numpy()
         set_predict(test_df.loc[test_df['content_type_id'] == 0, 
                                 ['row_id', 'answered_correctly']])
+        pbar.set_description(f'Current batch test length: {len(test_df)}')
+        pbar.update(len(test_df))
 
-    return test_df, output, item, group, prev_group, batch_user_ids
-# %%
-# user_common = set(batch_user_ids[0])
-# for k in range(1, len(batch_user_ids)):
-#     user_common = user_common.intersection(set(batch_user_ids[k]))
-# %% 
-'''
-Current set up, cv2_valid first 25k rows
-first 4 batches common user_id: 143316232, 1089397940, 1140583044 (placeholder user?)
-'''
-print(group[1089397940])
-#%% iter number 1
-test_df, output, item, group_updated, _, _ = iter_env_run(all_test_df, n_iter=1)
-u_idx_loc = test_df.index.get_loc(test_df[test_df.user_id==1089397940].index[0])
-print(f"local index of user 1089397940: {u_idx_loc}", '\n')
-print(test_df.iloc[u_idx_loc], '\n')
-print(item[1][u_idx_loc, -12:]) # user 1089397940 first batch in example_test (question sequence)
-print(item[0][u_idx_loc, -12:]) # user 1089397940 first batch in example_test: skill sequence = prev_content_id * (correct or not) + 13523
-print(output[u_idx_loc, -12:].cpu().numpy(),'\n') # user 1089397940 probability prediction
-
-print(group_updated[1089397940][0][:12]) # in the first iteration the length is only 11
-print(group_updated[1089397940][1][:12])
-#%% iter number 2
-test_df, output, item, group_updated, _, _ = iter_env_run(all_test_df, n_iter=2)
-u_idx_loc = test_df.index.get_loc(test_df[test_df.user_id==1089397940].index[0])
-print(f"local index of user 1089397940: {u_idx_loc}", '\n')
-print(test_df.iloc[u_idx_loc], '\n')
-print(item[1][u_idx_loc, -12:]) # user 1089397940 2nd batch in example_test (question sequence)
-print(item[0][u_idx_loc, -12:]) # user 1089397940 2nd batch in example_test: skill sequence = prev_content_id * (correct or not) + 13523
-print(output[u_idx_loc, -12:].cpu().numpy(),'\n') # user 1089397940 probability prediction
-
-print(group_updated[1089397940][0][:12]) # in the 2nd iteration the length is only 11
-print(group_updated[1089397940][1][:12])
-# %%
-test_df, output, item, group_updated, _, _ = iter_env_run(all_test_df, n_iter=3)
-u_idx_loc = test_df.index.get_loc(test_df[test_df.user_id==1089397940].index[0])
-print(f"local index of user 1089397940: {u_idx_loc}", '\n')
-print(test_df.iloc[u_idx_loc], '\n')
-print(item[1][u_idx_loc, -12:]) # user 1089397940 3rd batch in example_test (question sequence)
-print(item[0][u_idx_loc, -12:]) # user 1089397940 3rd batch in example_test: skill sequence = prev_content_id * (correct or not) + 13523
-print(output[u_idx_loc, -12:].cpu().numpy(),'\n') # user 1089397940 probability prediction
-
-print(group_updated[1089397940][0][:12]) # in the 3rd iteration the length is only 11
-print(group_updated[1089397940][1][:12])
+#%%
+y_true = all_test_df[all_test_df.content_type_id == 0].answered_correctly
+y_pred = pd.concat(predicted).answered_correctly
+print(f'\nValidation auc:', roc_auc_score(y_true, y_pred))
+print('# iterations:', len(predicted))
 # %%
