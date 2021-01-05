@@ -7,6 +7,7 @@ from tqdm import tqdm
 import time
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
+import pickle
 import torch
 import torch.nn as nn
 from torch import optim
@@ -22,6 +23,7 @@ sys.path.append(HOME)
 from utils import *
 from iter_env import *
 
+PREPROCESS = False
 NUM_SKILLS = 13523 # number of problems
 MAX_SEQ = 180
 ACCEPTED_USER_CONTENT_SIZE = 4
@@ -232,11 +234,16 @@ with timer("Loading train and valid"):
     all_test_df = all_test_df.astype(TRAIN_DTYPES)
     all_test_df = all_test_df[:TEST_SIZE]
 
-with timer("Processing train"):
-    train_df = train_df[TRAIN_DTYPES.keys()]
-    train_df = train_df[train_df[CONTENT_TYPE_ID] == False].reset_index(drop = True)
-    group = train_df[[USER_ID, CONTENT_ID, TARGET]].groupby(USER_ID)\
-        .apply(lambda r: (r[CONTENT_ID].values, r[TARGET].values))
+if PREPROCESS:
+    with timer("Processing cv2_train user group"):
+        train_df = train_df[TRAIN_DTYPES.keys()]
+        train_df = train_df[train_df[CONTENT_TYPE_ID] == False].reset_index(drop = True)
+        group = train_df[[USER_ID, CONTENT_ID, TARGET]].groupby(USER_ID)\
+            .apply(lambda r: (r[CONTENT_ID].values, r[TARGET].values))
+else:
+    with timer('Loading cv2_train user group'):
+        with open(os.path.join(DATA_DIR, 'sakt_group_cv2.pickle'), 'rb') as f:
+            group = pickle.load(f)
 
 iter_test = Iter_Valid(all_test_df, max_user=1000)
 prev_test_df= None

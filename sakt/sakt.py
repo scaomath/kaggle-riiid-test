@@ -65,7 +65,7 @@ TEST_DTYPES = {
 '''
 Model and training hyperparams
 '''
-MAX_SEQ = 150
+MAX_SEQ = 180
 NUM_EMBED = 128
 NUM_HEADS = 8
 NUM_SKILLS = 13523 # len(skills)
@@ -74,6 +74,11 @@ NUM_LAYERS = 1
 NUM_TIME = 300 # when scaled by 1000 and round, priori question time's unique values
 LEARNING_RATE = 1e-3
 PATIENCE = 8 # overfit patience
+ACCEPTED_USER_CONTENT_SIZE = 4
+RECENT_SIZE = 20
+DROPOUT = 0.1
+PRED_SEQ_LEN = 10
+RECENT_WEIGHT = 2
 
 '''
 System setup
@@ -164,9 +169,12 @@ def preprocess_sakt(df, train_flag=1, label_smoothing=False, smoothing_factor=0.
                             r[PRIOR_QUESTION_EXPLAIN].values))
     return group
 
-class SAKTDataset(Dataset):
+class SAKTDatasetOrig(Dataset):
+    '''
+    Original dataset
+    '''
     def __init__(self, group, n_skill, max_seq=MAX_SEQ):
-        super(SAKTDataset, self).__init__()
+        super(SAKTDatasetOrig, self).__init__()
         self.max_seq = max_seq
         self.n_skill = n_skill # 13523
         self.samples = group
@@ -216,6 +224,124 @@ class SAKTDataset(Dataset):
         x = q[:-1].copy() # 0 to 98
         x += (qa[:-1] == 1) * self.n_skill # y = et + rt x E
 
+        return x, target_id, label
+
+
+class SAKTDataset(Dataset):
+    def __init__(self, group, n_skill, max_seq=MAX_SEQ):
+        super(SAKTDataset, self).__init__()
+        self.samples, self.n_skill, self.max_seq = {}, n_skill, max_seq
+        
+        self.user_ids = []
+        for i, user_id in enumerate(group.index):
+            content_id, answered_correctly = group[user_id]
+            if len(content_id) >= ACCEPTED_USER_CONTENT_SIZE:
+                if len(content_id) > self.max_seq:
+                    total_questions = len(content_id)
+                    last_pos = total_questions // self.max_seq
+                    for seq in range(last_pos):
+                        index = f"{user_id}_{seq}"
+                        self.user_ids.append(index)
+                        start = seq * self.max_seq
+                        end = (seq + 1) * self.max_seq
+                        self.samples[index] = (content_id[start:end], 
+                                               answered_correctly[start:end])
+                    if len(content_id[end:]) >= ACCEPTED_USER_CONTENT_SIZE:
+                        index = f"{user_id}_{last_pos + 1}"
+                        self.user_ids.append(index)
+                        self.samples[index] = (content_id[end:], 
+                                               answered_correctly[end:])
+                else:
+                    index = f'{user_id}'
+                    self.user_ids.append(index)
+                    self.samples[index] = (content_id, answered_correctly)
+            '''
+            New: adding a shifted sequence
+            '''
+            if len(content_id) >= RECENT_SIZE: #
+                for i in range(1, RECENT_SIZE//2): # adding a shifted sequence
+                    '''
+                    generating much much more sequences by truncating
+                    '''
+                    content_id_truncated_end = content_id[:-i]
+                    answered_correctly_truncated_end = answered_correctly[:-i]
+                    if len(content_id_truncated_end) >= ACCEPTED_USER_CONTENT_SIZE:
+                        if len(content_id_truncated_end) > self.max_seq:
+                            total_questions_2 = len(content_id_truncated_end)
+                            last_pos = total_questions_2 // self.max_seq
+                            for seq in range(last_pos):
+                                index = f"{user_id}_{seq}_{i}_2"
+                                self.user_ids.append(index)
+                                start = seq * self.max_seq
+                                end = (seq + 1) * self.max_seq
+                                self.samples[index] = (content_id_truncated_end[start:end], 
+                                                    answered_correctly_truncated_end[start:end])
+                            if len(content_id_truncated_end[end:]) >= ACCEPTED_USER_CONTENT_SIZE:
+                                index = f"{user_id}_{last_pos + 1}_{i}_2"
+                                self.user_ids.append(index)
+                                self.samples[index] = (content_id_truncated_end[end:], 
+                                                    answered_correctly_truncated_end[end:])
+                        else:
+                            index = f'{user_id}_{i}_2'
+                            self.user_ids.append(index)
+                            self.samples[index] = (content_id_truncated_end, 
+                                                   answered_correctly_truncated_end)
+
+
+                    # '''
+                    # Truncating the first few entries
+                    # '''
+                    # content_id_truncated_start = content_id[i:]
+                    # answered_correctly_truncated_start = answered_correctly[i:]
+
+                    # if len(content_id_truncated_start) >= ACCEPTED_USER_CONTENT_SIZE:
+                    #     if len(content_id_truncated_start) > self.max_seq:
+                    #         total_questions_1 = len(content_id_truncated_start)
+                    #         last_pos = total_questions_1 // self.max_seq
+                    #         for seq in range(last_pos):
+                    #             index = f"{user_id}_{seq}_{i}_1"
+                    #             self.user_ids.append(index)
+                    #             start = seq * self.max_seq
+                    #             end = (seq + 1) * self.max_seq
+                    #             self.samples[index] = (content_id_truncated_start[start:end], 
+                    #                                 answered_correctly_truncated_start[start:end])
+                    #         if len(content_id_truncated_start[end:]) >= ACCEPTED_USER_CONTENT_SIZE:
+                    #             index = f"{user_id}_{last_pos + 1}_{i}_1"
+                    #             self.user_ids.append(index)
+                    #             self.samples[index] = (content_id_truncated_start[end:], 
+                    #                                 answered_correctly_truncated_start[end:])
+                    #     else:
+                    #         index = f'{user_id}_{i}_1'
+                    #         self.user_ids.append(index)
+                    #         self.samples[index] = (content_id_truncated_start, 
+                    #                                answered_correctly_truncated_start)
+
+                
+    def __len__(self):
+        return len(self.user_ids)
+
+    def __getitem__(self, index):
+        user_id = self.user_ids[index]
+        content_id, answered_correctly = self.samples[user_id]
+        seq_len = len(content_id)
+        
+        content_id_seq = np.zeros(self.max_seq, dtype=int)
+        answered_correctly_seq = np.zeros(self.max_seq, dtype=int)
+
+        if seq_len >= self.max_seq:
+            content_id_seq[:] = content_id[-self.max_seq:]
+            answered_correctly_seq[:] = answered_correctly[-self.max_seq:]
+        else:
+            content_id_seq[-seq_len:] = content_id
+            answered_correctly_seq[-seq_len:] = answered_correctly
+            
+        target_id = content_id_seq[1:] # question including the current one
+        label = answered_correctly_seq[1:]
+        
+        x = content_id_seq[:-1].copy() # question till the previous one
+        # encoded answers till the previous one
+        x += (answered_correctly_seq[:-1] == 1) * self.n_skill
+        
         return x, target_id, label
 
 
@@ -303,44 +429,86 @@ class SAKTDatasetNew(Dataset):
         return x, target_id,  label,  prior_q_time,  prior_q_explain
 
 
+# class TestDataset(Dataset):
+#     def __init__(self, samples, test_df, n_skills, max_seq=MAX_SEQ):
+#         super(TestDataset, self).__init__()
+#         self.samples = samples
+#         self.user_ids = [x for x in test_df["user_id"].unique()]
+#         self.test_df = test_df
+#         self.n_skill = n_skills
+#         self.max_seq = max_seq
+
+#     def __len__(self):
+#         return self.test_df.shape[0]
+
+#     def __getitem__(self, index):
+#         test_info = self.test_df.iloc[index]
+
+#         user_id = test_info["user_id"]
+#         target_id = test_info["content_id"]
+
+#         q = np.zeros(self.max_seq, dtype=int)
+#         qa = np.zeros(self.max_seq, dtype=int)
+
+#         if user_id in self.samples.index:
+#             q_, qa_ = self.samples[user_id]
+            
+#             seq_len = len(q_)
+
+#             if seq_len >= self.max_seq:
+#                 q = q_[-self.max_seq:]
+#                 qa = qa_[-self.max_seq:]
+#             else:
+#                 q[-seq_len:] = q_
+#                 qa[-seq_len:] = qa_          
+        
+#         x = np.zeros(self.max_seq-1, dtype=int)
+#         x = q[1:].copy()
+#         x += (qa[1:] == 1) * self.n_skill
+        
+#         questions = np.append(q[2:], [target_id])
+        
+#         return x, questions
+
 class TestDataset(Dataset):
-    def __init__(self, samples, test_df, n_skills, max_seq=MAX_SEQ):
+    '''
+    A more readable version
+    '''
+    def __init__(self, samples, test_df, n_skill, max_seq=100):
         super(TestDataset, self).__init__()
         self.samples = samples
         self.user_ids = [x for x in test_df["user_id"].unique()]
         self.test_df = test_df
-        self.n_skill = n_skills
-        self.max_seq = max_seq
+        self.n_skill, self.max_seq = n_skill, max_seq
 
     def __len__(self):
         return self.test_df.shape[0]
-
+    
     def __getitem__(self, index):
         test_info = self.test_df.iloc[index]
-
-        user_id = test_info["user_id"]
-        target_id = test_info["content_id"]
-
-        q = np.zeros(self.max_seq, dtype=int)
-        qa = np.zeros(self.max_seq, dtype=int)
-
+        
+        user_id = test_info['user_id']
+        target_id = test_info['content_id']
+        
+        content_id_seq = np.zeros(self.max_seq, dtype=int)
+        answered_correctly_seq = np.zeros(self.max_seq, dtype=int)
+        
         if user_id in self.samples.index:
-            q_, qa_ = self.samples[user_id]
+            content_id, answered_correctly = self.samples[user_id]
             
-            seq_len = len(q_)
-
+            seq_len = len(content_id)
+            
             if seq_len >= self.max_seq:
-                q = q_[-self.max_seq:]
-                qa = qa_[-self.max_seq:]
+                content_id_seq = content_id[-self.max_seq:]
+                answered_correctly_seq = answered_correctly[-self.max_seq:]
             else:
-                q[-seq_len:] = q_
-                qa[-seq_len:] = qa_          
+                content_id_seq[-seq_len:] = content_id
+                answered_correctly_seq[-seq_len:] = answered_correctly
+                
+        x = content_id_seq[1:].copy()
+        x += (answered_correctly_seq[1:] == 1) * self.n_skill
         
-        x = np.zeros(self.max_seq-1, dtype=int)
-        x = q[1:].copy()
-        x += (qa[1:] == 1) * self.n_skill
-        
-        questions = np.append(q[2:], [target_id])
+        questions = np.append(content_id_seq[2:], [target_id])
         
         return x, questions
 
@@ -399,34 +567,120 @@ class TestDatasetNew(Dataset):
         return x, questions, prior_q_time, prior_q_explain
 
 class FFN(nn.Module):
-    def __init__(self, state_size=NUM_EMBED, nc=1):
+    def __init__(self, state_size = MAX_SEQ, 
+                    forward_expansion = 1, 
+                    bn_size=MAX_SEQ - 1, 
+                    dropout=DROPOUT):
         super(FFN, self).__init__()
         self.state_size = state_size
-
-        self.lr1 = nn.Linear(state_size, state_size//nc)
+        
+        self.lr1 = nn.Linear(state_size, forward_expansion * state_size)
         self.relu = nn.ReLU()
-        # self.leakyrelu = nn.LeakyReLU()
-        self.lr2 = nn.Linear(state_size//nc, state_size//nc)
-        self.dropout = nn.Dropout(0.2)
-    
+        self.bn = nn.BatchNorm1d(bn_size)
+        self.lr2 = nn.Linear(forward_expansion * state_size, state_size)
+        self.dropout = nn.Dropout(dropout)
+        
     def forward(self, x):
-        x = self.lr1(x)
-        x = self.relu(x)
+        x = self.relu(self.lr1(x))
+        x = self.bn(x)
         x = self.lr2(x)
         return self.dropout(x)
 
 def future_mask(seq_length):
-    future_mask = np.triu(np.ones((seq_length, seq_length)), k=1).astype('bool')
+    future_mask = (np.triu(np.ones([seq_length, seq_length]), k = 1)).astype('bool')
     return torch.from_numpy(future_mask)
 
 
+
+class TransformerBlock(nn.Module):
+    def __init__(self, embed_dim, 
+                    heads = NUM_HEADS, 
+                    dropout = DROPOUT, 
+                    forward_expansion = 1):
+        super(TransformerBlock, self).__init__()
+        self.multi_att = nn.MultiheadAttention(embed_dim=embed_dim, 
+                        num_heads=heads, dropout=dropout)
+        self.dropout = nn.Dropout(dropout)
+        self.layer_normal = nn.LayerNorm(embed_dim)
+        self.ffn = FFN(embed_dim, 
+                    forward_expansion = forward_expansion, 
+                    dropout=dropout)
+        self.layer_normal_2 = nn.LayerNorm(embed_dim)
+        
+
+    def forward(self, value, key, query, att_mask):
+        att_output, att_weight = self.multi_att(value, key, query, attn_mask=att_mask)
+        att_output = self.dropout(self.layer_normal(att_output + value))
+        att_output = att_output.permute(1, 0, 2) 
+        # att_output: [s_len, bs, embed] => [bs, s_len, embed]
+        x = self.ffn(att_output)
+        x = self.dropout(self.layer_normal_2(x + att_output))
+        return x.squeeze(-1), att_weight
+    
+class Encoder(nn.Module):
+    def __init__(self, n_skill, max_seq=MAX_SEQ, 
+                 embed_dim=NUM_EMBED, 
+                 dropout = DROPOUT, 
+                 forward_expansion = 1, 
+                 num_layers=1, 
+                 heads = NUM_HEADS):
+        super(Encoder, self).__init__()
+        self.n_skill, self.embed_dim = n_skill, embed_dim
+        self.embedding = nn.Embedding(2 * n_skill + 1, embed_dim)
+        self.pos_embedding = nn.Embedding(max_seq - 1, embed_dim)
+        self.e_embedding = nn.Embedding(n_skill+1, embed_dim)
+        self.layers = nn.ModuleList([TransformerBlock(embed_dim, heads=heads,
+                forward_expansion = forward_expansion) for _ in range(num_layers)])
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, x, question_ids):
+        device = x.device
+        x = self.embedding(x)
+        pos_id = torch.arange(x.size(1)).unsqueeze(0).to(device)
+        pos_x = self.pos_embedding(pos_id)
+        x = self.dropout(x + pos_x)
+        x = x.permute(1, 0, 2) # x: [bs, s_len, embed] => [s_len, bs, embed]
+        e = self.e_embedding(question_ids)
+        e = e.permute(1, 0, 2)
+        for layer in self.layers:
+            att_mask = future_mask(e.size(0)).to(device)
+            x, att_weight = layer(e, x, x, att_mask=att_mask)
+            x = x.permute(1, 0, 2)
+        x = x.permute(1, 0, 2)
+        return x, att_weight
+
 class SAKTModel(nn.Module):
+    def __init__(self, 
+                n_skill, 
+                max_seq=MAX_SEQ, 
+                embed_dim=NUM_EMBED, 
+                dropout = DROPOUT, 
+                forward_expansion = 1, 
+                enc_layers=1, 
+                heads = NUM_HEADS):
+        super(SAKTModel, self).__init__()
+        self.encoder = Encoder(n_skill, 
+                               max_seq, 
+                               embed_dim, 
+                               dropout, 
+                               forward_expansion, 
+                               num_layers=enc_layers,
+                               heads=heads)
+        self.pred = nn.Linear(embed_dim, 1)
+        
+    def forward(self, x, question_ids):
+        x, att_weight = self.encoder(x, question_ids)
+        x = self.pred(x)
+        return x.squeeze(-1), att_weight
+
+
+class SAKTModelOrig(nn.Module):
     def __init__(self, n_skill, 
                        max_seq=MAX_SEQ, 
                        embed_dim=NUM_EMBED, 
                        num_heads=NUM_HEADS,
                        num_layers=NUM_LAYERS):
-        super(SAKTModel, self).__init__()
+        super(SAKTModelOrig, self).__init__()
         self.__name__ = 'sakt'
         self.n_skill = n_skill
         self.embed_dim = embed_dim
@@ -635,7 +889,125 @@ class SAKTMulti(nn.Module):
 
         return x.squeeze(-1), [att_weight1]
 
-def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
+def load_from_item(item, device='cuda'):
+    x = item[0].to(device).long()
+    target_id = item[1].to(device).long()
+    label = item[2].to(device).float()
+    target_mask = (target_id != 0)
+    return x, target_id, label, target_mask
+
+def load_from_item_weight(item, device='cuda', recent_window=PRED_SEQ_LEN):
+    '''
+    Update a new important mask toward the end of the sequence
+    '''
+    x = item[0].to(device).long()
+    target_id = item[1].to(device).long()
+    label = item[2].to(device).float()
+    target_mask = (target_id != 0)
+    tmp = torch.zeros_like(target_mask)
+    tmp[:,-recent_window:] = True
+    target_mask_recent = torch.logical_and(tmp, target_mask)
+    return x, target_id, label, target_mask, target_mask_recent
+
+
+def update_stats(train_loss, loss, output, label, num_corrects, num_total, labels, outs):
+    train_loss.append(loss.item())
+    pred = (torch.sigmoid(output) >= 0.5).long()
+    num_corrects += (pred == label).sum().item()
+    num_total += len(label)
+    labels.extend(label.view(-1).data.cpu().numpy())
+    outs.extend(output.view(-1).data.cpu().numpy())
+    return num_corrects, num_total
+
+def train_epoch(model, dataloader, optim, criterion, scheduler, device='cuda'):
+    model.train()
+    
+    tbar = tqdm(dataloader)
+    for idx, item in enumerate(tbar):
+        x, target_id, label, target_mask = load_from_item(item, device)
+        
+        optim.zero_grad()
+        output, _ = model(x, target_id)
+        
+        output = torch.masked_select(output, target_mask)
+        label = torch.masked_select(label, target_mask)
+        
+        loss = criterion(output, label)
+        loss.backward()
+        optim.step()
+        scheduler.step()
+        
+        if idx % TQDM_INT ==0:
+            lr = optim.param_groups[0]['lr']
+            tbar.set_description(f'Batch loss - {loss:.4f} - Current LR: {lr:.2e}')
+
+def train_epoch_weighted(model, dataloader, optim, criterion, scheduler, 
+                        device='cuda',
+                        recent_weight=RECENT_WEIGHT):
+    model.train()
+    
+    tbar = tqdm(dataloader)
+    for idx, item in enumerate(tbar):
+        x, target_id, label, target_mask, target_mask_recent = load_from_item_weight(item, device)
+        
+        optim.zero_grad()
+        output, _ = model(x, target_id)
+        
+        output_recent = torch.masked_select(output, target_mask_recent)
+        label_recent = torch.masked_select(label, target_mask_recent)
+        
+        output = torch.masked_select(output, target_mask)
+        label = torch.masked_select(label, target_mask)
+        
+        loss = criterion(output, label) + \
+                + recent_weight*criterion(output_recent, label_recent)
+
+        loss.backward()
+        optim.step()
+        scheduler.step()
+        
+        if idx % TQDM_INT ==0:
+            lr = optim.param_groups[0]['lr']
+            tbar.set_description(f'Batch loss - {loss:.4f} - Current LR: {lr:.2e}')
+
+
+def valid_epoch(model, val_iterator, criterion, recent_only=False):
+    model.eval()
+
+    train_loss = []
+    num_corrects = 0
+    num_total = 0
+    labels = []
+    outs = []
+
+    tbar = tqdm(val_iterator)
+    for item in tbar:
+        x, target_id, label, target_mask, target_mask_recent = load_from_item_weight(item)
+
+        with torch.no_grad():
+            output, _ = model(x, target_id)
+        
+        if recent_only: 
+            output = torch.masked_select(output, target_mask_recent)
+            label = torch.masked_select(label, target_mask_recent)
+        else:
+            output = torch.masked_select(output, target_mask)
+            label = torch.masked_select(label, target_mask)
+
+        loss = criterion(output, label)
+        
+        num_corrects, num_total = update_stats(train_loss, loss, 
+                                               output, label, 
+                                               num_corrects,num_total, 
+                                               labels, outs)
+
+    acc = num_corrects / num_total
+    auc = roc_auc_score(labels, outs)
+    loss = np.average(train_loss)
+
+    return loss, acc, auc
+
+def train_epoch_orig(model, train_iterator, optim, criterion, device="cuda"):
     '''
     Original training strategy
     overfitting in some sense
@@ -685,7 +1057,7 @@ def train_epoch(model, train_iterator, optim, criterion, device="cuda"):
 
     return loss, acc, auc
 
-def valid_epoch(model, valid_iterator, criterion, device="cuda", conf=None):
+def valid_epoch_orig(model, valid_iterator, criterion, device="cuda", conf=None):
     model.eval()
     scaling = 1 if conf is None else conf.SCALING
     valid_loss = []

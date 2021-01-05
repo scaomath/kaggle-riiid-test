@@ -45,6 +45,7 @@ If there is layer normalization, multiplying with a scaling factor does not matt
 
 - (Dec 18) Same with 6 Label smoothing with a factor of 0.2, CV scaling = 4, CV < 0.73....
 
+- (Jan 3) Finally found the bug of the transformer-based model, the `train_loader` is way too few to cater the inference pipeline. Done the shifted training sequence and the CV improved to 0.779, LB unchanged 0.776. Ensembled LB increased to 0.788.
 
 
 TO-DO:
@@ -52,6 +53,8 @@ TO-DO:
 - [x] Testing add a separate `previous_answers_correct` embedding
 - [ ] Testing adding a "User growth" feature to the embedding...(maybe not very good as the attention-based model should be more automatic)
 - [ ] Using a multitarget with the second target being the LGBM oof-prediction/other things.
+- [x] Testing a new training strategy using a shifted sequence.
+- [ ] Disable `shuffle` in `train_loader` see if the the CV gets better. 
 
 
 ## LightGBM models
