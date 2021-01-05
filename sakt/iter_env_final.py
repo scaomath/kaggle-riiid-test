@@ -61,21 +61,6 @@ TRAIN_DTYPES = {TIMESTAMP: 'int64',
          TARGET:'int8',
          PRIOR_QUESTION_TIME: np.float32,
          PRIOR_QUESTION_EXPLAIN: 'boolean'}
-
-with timer("Loading train and valid"):
-    train_df = pd.read_parquet(DATA_DIR+'cv2_train.parquet',
-                                        columns=list(TRAIN_DTYPES.keys()))
-    train_df = train_df.astype(TRAIN_DTYPES)
-    all_test_df = pd.read_parquet(DATA_DIR+'cv2_valid.parquet')
-    all_test_df = all_test_df.astype(TRAIN_DTYPES)
-    all_test_df = all_test_df[:TEST_SIZE]
-
-
-train_df = train_df[TRAIN_DTYPES.keys()]
-train_df = train_df[train_df[CONTENT_TYPE_ID] == False].reset_index(drop = True)
-group = train_df[[USER_ID, CONTENT_ID, TARGET]].groupby(USER_ID)\
-    .apply(lambda r: (r[CONTENT_ID].values, r[TARGET].values))
-
 #%%
 
 class TestDataset(Dataset):
@@ -239,12 +224,26 @@ model.load_state_dict(torch.load(model_file, map_location=device))
 model.eval()
 
 #%%
+with timer("Loading train and valid"):
+    train_df = pd.read_parquet(DATA_DIR+'cv2_train.parquet',
+                                        columns=list(TRAIN_DTYPES.keys()))
+    train_df = train_df.astype(TRAIN_DTYPES)
+    all_test_df = pd.read_parquet(DATA_DIR+'cv2_valid.parquet')
+    all_test_df = all_test_df.astype(TRAIN_DTYPES)
+    all_test_df = all_test_df[:TEST_SIZE]
+
+with timer("Processing train"):
+    train_df = train_df[TRAIN_DTYPES.keys()]
+    train_df = train_df[train_df[CONTENT_TYPE_ID] == False].reset_index(drop = True)
+    group = train_df[[USER_ID, CONTENT_ID, TARGET]].groupby(USER_ID)\
+        .apply(lambda r: (r[CONTENT_ID].values, r[TARGET].values))
+
 iter_test = Iter_Valid(all_test_df, max_user=1000)
 prev_test_df= None
 predicted = []
 def set_predict(df):
     predicted.append(df)
-
+#%%
 len_test = len(all_test_df)
 with tqdm(total=len(all_test_df)) as pbar:
     for idx, (test_df, sample_prediction_df) in enumerate(iter_test):
