@@ -141,8 +141,9 @@ model = SAKTModel(n_skill=NUM_SKILLS,
                   dropout=DROPOUT)
 
 # model_name = 'sakt_seq_180_auc_0.7689.pth' # the current best LB one
+model_name = 'sakt_seq_180_auc_0.7758.pt' # tie the best LB one
 # model_name = 'sakt_seq_180_auc_0.7746.pt'
-model_name = 'sakt_seq_180_auc_0.7759.pt' # current best CV trained on all groups
+# model_name = 'sakt_seq_180_auc_0.7759.pt' # current best CV trained on all groups
 model_path = os.path.join(MODEL_DIR, model_name)
 
 model.load_state_dict(torch.load(model_path, map_location=device))

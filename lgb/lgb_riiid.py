@@ -40,7 +40,7 @@ TRAIN_DTYPES = {
 
 
 questions_df = pd.read_csv(os.path.join(DATA_DIR, 'questions.csv'))
-questions_df['part'] = questions_df['part'].astype(np.int32)
+questions_df['part'] = questions_df['part'].astype(np.int8)
 questions_df['bundle_id'] = questions_df['bundle_id'].astype(np.int32)
 
 def preprocess_lgb(df):

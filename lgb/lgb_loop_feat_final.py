@@ -76,10 +76,11 @@ TRAIN_COLS = ['timestamp',
             'answered_correctly',
             'content_id', 
             'content_type_id', 
+            'task_container_id',
             'prior_question_elapsed_time', 
             'prior_question_had_explanation']
 
-DEBUG = False # only using a fraction of the data
+DEBUG = True # only using a fraction of the data
 
 if DEBUG:
     NROWS_TEST = 25_000
@@ -88,7 +89,7 @@ if DEBUG:
 else:
     NROWS_TEST = 100_000
     NROWS_TRAIN = 90_000_000
-    NROWS_VAL = 1_000_000
+    NROWS_VAL = 2_000_000
 
 
 #%%
@@ -565,9 +566,9 @@ def add_features_test_new(test_df):
                 
                 explanation_u_sum_dict[user_id] += prior_q_had_explanation*question_u_last_bundle_count_dict[user_id]
             
-            elapsed_time_u_avg[num] = elapsed_time_u_sum_dict[user_id]/question_u_count_dict[user_id]
-            explanation_u_avg[num] = explanation_u_sum_dict[user_id]/question_u_count_dict[user_id]
-            ###⑥只需要当前组的prior（也就是上一组的平均时间或者是否解答），就可以计算了
+            # elapsed_time_u_avg[num] = elapsed_time_u_sum_dict[user_id]/question_u_count_dict[user_id]
+            # explanation_u_avg[num] = explanation_u_sum_dict[user_id]/question_u_count_dict[user_id]
+            # ###⑥只需要当前组的prior（也就是上一组的平均时间或者是否解答），就可以计算了
         
             if question_u_count_dict[user_id] !=0:
                 elapsed_time_u_avg[num] = elapsed_time_u_sum_dict[user_id]/question_u_count_dict[user_id]
@@ -849,8 +850,11 @@ def update_features(df,
 #%%
 
 print('\nUser feature calculation started...\n')
-train = add_features_new(train)
-valid = add_features_new(valid)
+len_train = len(train)
+all_data = pd.concat([train, valid], axis=0)
+all_data = add_features_new(all_data)
+train = all_data[:len_train]
+valid = all_data[len_train:]
 
 gc.collect()
 print('\nUser feature calculation completed...\n')
@@ -911,10 +915,10 @@ features = ['answered_correctly_u_avg',
 #%% 
 print(f'Before drop train: {train.shape[0]} rows and {len(features)} features')   
 
-
-train = train[:NROWS_TRAIN//2]
-valid = valid[:NROWS_VAL]
-gc.collect();
+if not DEBUG:
+    train = train[:NROWS_TRAIN//2]
+    valid = valid[:NROWS_VAL//2]
+    gc.collect();
 
 drop_cols = list(set(train.columns).difference(features))
 y_train = train[target].values.astype('int8')
@@ -949,7 +953,7 @@ model = lgb.train(
     num_boost_round = 5000,
     valid_sets = [lgb_train, lgb_valid],
     early_stopping_rounds = 50,
-    verbose_eval = 20
+    verbose_eval = 50
 )
 val_auc = roc_auc_score(y_val, model.predict(valid[features]))
 print(f'AUC score for the validation data is: {val_auc:.4f}')
