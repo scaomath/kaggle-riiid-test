@@ -43,14 +43,14 @@ TEST_SIZE = 0.05 # un-used
 
 NUM_SKILLS = 13523 # number of problems
 MAX_SEQ = 180
-ACCEPTED_USER_CONTENT_SIZE = 4
+ACCEPTED_USER_CONTENT_SIZE = 5
 EMBED_SIZE = 128
-RECENT_SIZE = 20 # recent data in the training loop
+RECENT_SIZE = 40 # recent data in the training loop
 NUM_HEADS = 8
 BATCH_SIZE = 64
-VAL_BATCH_SIZE = 2048
+VAL_BATCH_SIZE = 4096
 DEBUG_TEST_SIZE = 10_000
-TEST_SIZE = 25_000
+TEST_SIZE = 100_000
 DROPOUT = 0.1
 SEED = 1127
 
@@ -66,12 +66,21 @@ with timer("Loading train and valid"):
         group = pickle.load(f)
     train_group, valid_group = train_test_split(group, test_size = TEST_SIZE, random_state=SEED)
 
+
+#%% EDA on group
+user_length = []
+for item in group.items():
+    user_length.append(len(item[1][0]))
+user_length = np.array(user_length)
+user_length = user_length[user_length<100]
+pd.DataFrame(user_length).hist(bins=20)
 # %%
-train_dataset = SAKTDataset(train_group, n_skill=NUM_SKILLS, max_seq=MAX_SEQ)
+train_dataset = SAKTDataset(train_group, n_skill=NUM_SKILLS, max_seq=MAX_SEQ,
+                            min_seq=ACCEPTED_USER_CONTENT_SIZE, recent_seq=RECENT_SIZE)
 train_dataloader = DataLoader(train_dataset, 
                         batch_size=BATCH_SIZE, 
-                        # shuffle=True, 
-                        shuffle=False,
+                        shuffle=True, 
+                        # shuffle=False,
                         drop_last=True)
 
 
@@ -111,7 +120,9 @@ def run_train(lr=1e-3, epochs=10, device='cuda'):
         train_epoch(model, train_dataloader, optimizer, criterion, scheduler, device)
         # train_epoch_weighted(model, train_dataloader, optimizer, criterion, scheduler, device)
         val_loss, val_acc, val_auc = valid_epoch(model, val_dataloader, criterion, device)
-        tqdm.write(f"\nEpoch - {epoch+1} val_loss - {val_loss:.3f} acc - {val_acc:.3f} auc - {val_auc:.3f}")
+        val_info = f"\nEpoch - {epoch+1}"
+        val_info += f" val_loss - {val_loss:.3f} acc - {val_acc:.3f} auc - {val_auc:.3f}"
+        tqdm.write(val_info)
         if best_auc < val_auc:
             print(f'Epoch - {epoch+1} best model with val auc: {val_auc}')
             best_auc = val_auc
@@ -119,13 +130,90 @@ def run_train(lr=1e-3, epochs=10, device='cuda'):
             f'sakt_seq_{MAX_SEQ}_auc_{val_auc:.4f}.pt'))
 # %%
 LR = 1e-3
-EPOCHS = 10
+EPOCHS = 2
 run_train(lr=LR, epochs=EPOCHS)
-# %%
-with timer("Loading private simulated test set"):
-    all_test_df = pd.read_parquet(os.path.join(DATA_DIR,'cv5_valid.parquet'))
-    all_test_df = all_test_df[:DEBUG_TEST_SIZE]
+#%%
+model = SAKTModel(n_skill=NUM_SKILLS, 
+                  max_seq=MAX_SEQ, 
+                  embed_dim=EMBED_SIZE, 
+                  forward_expansion=1, 
+                  enc_layers=1, 
+                  heads=NUM_HEADS, 
+                  dropout=DROPOUT)
 
+# model_name = 'sakt_seq_180_auc_0.7689.pth' # the current best LB one
+# model_name = 'sakt_seq_180_auc_0.7746.pt'
+model_name = 'sakt_seq_180_auc_0.7758.pt' # current best CV 
+model_path = os.path.join(MODEL_DIR, model_name)
+
+model.load_state_dict(torch.load(model_path, map_location=device))
+model.to(device)
+
+#%%
+LR = 1e-4
+EPOCHS = 2
+RECENT_SIZE = 30
+BATCH_SIZE = 128
+
+for _ in range(2):
+
+    ACCEPTED_USER_CONTENT_SIZE += 1
+    RECENT_SIZE -= 2
+
+    train_dataset = SAKTDataset(train_group, 
+                            n_skill=NUM_SKILLS, 
+                            max_seq=MAX_SEQ,
+                            min_seq=ACCEPTED_USER_CONTENT_SIZE, 
+                            recent_seq=RECENT_SIZE)
+    train_dataloader = DataLoader(train_dataset, 
+                            batch_size=BATCH_SIZE, 
+                            shuffle=True, 
+                            drop_last=True)
+
+
+    val_dataset = SAKTDataset(valid_group, 
+                              n_skill=NUM_SKILLS, 
+                              max_seq=MAX_SEQ)
+    val_dataloader = DataLoader(val_dataset, 
+                            batch_size=VAL_BATCH_SIZE, 
+                            shuffle=False)
+    
+    print(f"\n\nLength of the train loader: {len(train_dataloader)}")
+    print(f"Learning rate: {LR} - Batch size: {BATCH_SIZE}")
+
+    run_train(lr=LR, epochs=EPOCHS)
+    LR *= 0.5
+# %% 
+
+'''
+Final validation pipeline
+'''
+
+
+with timer("Loading cv2 group and private simulated test set"):
+    all_test_df = pd.read_parquet(os.path.join(DATA_DIR,'cv2_valid.parquet'))
+    all_test_df = all_test_df[:TEST_SIZE]
+    with open(os.path.join(DATA_DIR, 'sakt_group_cv2.pickle'), 'rb') as f:
+            group = pickle.load(f)
+
+
+# load model
+model = SAKTModel(n_skill=NUM_SKILLS, 
+                  max_seq=MAX_SEQ, 
+                  embed_dim=EMBED_SIZE, 
+                  forward_expansion=1, 
+                  enc_layers=1, 
+                  heads=NUM_HEADS, 
+                  dropout=DROPOUT)
+
+model_name = 'sakt_seq_180_auc_0.7689.pth' # the current best LB one
+# model_name = 'sakt_seq_180_auc_0.7746.pt'
+# model_name = 'sakt_seq_180_auc_0.7758.pt' # current best CV 
+model_path = os.path.join(MODEL_DIR, model_name)
+
+model.load_state_dict(torch.load(model_path, map_location=device))
+model.to(device)
+model.eval()
 # %%
 
 iter_test = Iter_Valid(all_test_df, max_user=1000)

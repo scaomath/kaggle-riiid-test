@@ -30,7 +30,7 @@ import gc
 from contextlib import contextmanager
 
 
-def plot_feature_importance(model, importance_type='gain', num_features=10):
+def plot_feature_importance(model, features, importance_type='gain', num_features=10):
     feature_importance = model.feature_importance(importance_type=importance_type)
     feature_importance = pd.DataFrame({'Features': features, 
                                        'Importance': feature_importance})\

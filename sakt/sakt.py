@@ -228,14 +228,21 @@ class SAKTDatasetOrig(Dataset):
 
 
 class SAKTDataset(Dataset):
-    def __init__(self, group, n_skill, max_seq=MAX_SEQ):
+    def __init__(self, group, n_skill, 
+                        max_seq=MAX_SEQ, 
+                        min_seq=ACCEPTED_USER_CONTENT_SIZE,
+                        recent_seq=RECENT_SIZE):
         super(SAKTDataset, self).__init__()
-        self.samples, self.n_skill, self.max_seq = {}, n_skill, max_seq
+        self.samples = {}
+        self.n_skill = n_skill
+        self.max_seq = max_seq
+        self.min_seq = min_seq
+        self.recent_seq = recent_seq
         
         self.user_ids = []
         for i, user_id in enumerate(group.index):
             content_id, answered_correctly = group[user_id]
-            if len(content_id) >= ACCEPTED_USER_CONTENT_SIZE:
+            if len(content_id) >= self.min_seq:
                 if len(content_id) > self.max_seq:
                     total_questions = len(content_id)
                     last_pos = total_questions // self.max_seq
@@ -246,7 +253,7 @@ class SAKTDataset(Dataset):
                         end = (seq + 1) * self.max_seq
                         self.samples[index] = (content_id[start:end], 
                                                answered_correctly[start:end])
-                    if len(content_id[end:]) >= ACCEPTED_USER_CONTENT_SIZE:
+                    if len(content_id[end:]) >= self.min_seq:
                         index = f"{user_id}_{last_pos + 1}"
                         self.user_ids.append(index)
                         self.samples[index] = (content_id[end:], 
@@ -258,14 +265,14 @@ class SAKTDataset(Dataset):
             '''
             New: adding a shifted sequence
             '''
-            if len(content_id) >= RECENT_SIZE: #
-                for i in range(1, RECENT_SIZE//2): # adding a shifted sequence
+            if len(content_id) >= self.recent_seq: #
+                for i in range(1, self.recent_seq//2): # adding a shifted sequence
                     '''
                     generating much much more sequences by truncating
                     '''
                     content_id_truncated_end = content_id[:-i]
                     answered_correctly_truncated_end = answered_correctly[:-i]
-                    if len(content_id_truncated_end) >= ACCEPTED_USER_CONTENT_SIZE:
+                    if len(content_id_truncated_end) >= self.min_seq:
                         if len(content_id_truncated_end) > self.max_seq:
                             total_questions_2 = len(content_id_truncated_end)
                             last_pos = total_questions_2 // self.max_seq
@@ -276,7 +283,7 @@ class SAKTDataset(Dataset):
                                 end = (seq + 1) * self.max_seq
                                 self.samples[index] = (content_id_truncated_end[start:end], 
                                                     answered_correctly_truncated_end[start:end])
-                            if len(content_id_truncated_end[end:]) >= ACCEPTED_USER_CONTENT_SIZE:
+                            if len(content_id_truncated_end[end:]) >= self.min_seq:
                                 index = f"{user_id}_{last_pos + 1}_{i}_2"
                                 self.user_ids.append(index)
                                 self.samples[index] = (content_id_truncated_end[end:], 
@@ -294,7 +301,7 @@ class SAKTDataset(Dataset):
                     # content_id_truncated_start = content_id[i:]
                     # answered_correctly_truncated_start = answered_correctly[i:]
 
-                    # if len(content_id_truncated_start) >= ACCEPTED_USER_CONTENT_SIZE:
+                    # if len(content_id_truncated_start) >= self.min_seq:
                     #     if len(content_id_truncated_start) > self.max_seq:
                     #         total_questions_1 = len(content_id_truncated_start)
                     #         last_pos = total_questions_1 // self.max_seq
@@ -305,7 +312,7 @@ class SAKTDataset(Dataset):
                     #             end = (seq + 1) * self.max_seq
                     #             self.samples[index] = (content_id_truncated_start[start:end], 
                     #                                 answered_correctly_truncated_start[start:end])
-                    #         if len(content_id_truncated_start[end:]) >= ACCEPTED_USER_CONTENT_SIZE:
+                    #         if len(content_id_truncated_start[end:]) >= self.min_seq:
                     #             index = f"{user_id}_{last_pos + 1}_{i}_1"
                     #             self.user_ids.append(index)
                     #             self.samples[index] = (content_id_truncated_start[end:], 

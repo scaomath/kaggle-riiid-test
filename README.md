@@ -1,8 +1,8 @@
 # Kaggle Riiid Test Answer Correctness
 Playground for [Kaggle competition Riiid! Answer Correctness Prediction](https://www.kaggle.com/c/riiid-test-answer-prediction)
 
-## EDA and ideas
-
+## EDA, observations, ideas
+- In the inference `iter_env`, the correct target will be updated to `previous_test_df` even when the current prediction is wrong. Adding rolling mean type features is possible.
 - In the CV tito and marisakamozz proposed, the test iterator df is sorted by `virtual_timestamp`, which is nice.
 - Currently many features do `fillna` using the mean for all users, how about the `fillna` just for one user? 
 - How to address the fact that a random guess would yield 25% correct rate?
@@ -69,6 +69,8 @@ TO-DO:
 
 - (Dec 29) First full model submit. LB 0.776.
 
+- (Jan 4) LGB loop feature model: after dropping `train[train.content_id==1]`, some users have a starting `timestamp` nonzero, because this user may watch a lecture as the first interaction.
+
 ### Features TO-DO:
 
 - [ ] Commonness/difficulty rating of the questions
@@ -79,5 +81,5 @@ TO-DO:
 
 
 
-## NN and deeper models
--  TabNet baseline
+~~## NN and deeper models~~
+~~-  TabNet baseline: no time and inference time limit may exceed.~~

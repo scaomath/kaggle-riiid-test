@@ -118,7 +118,7 @@ def timer(label: str) -> None:
     start = time()  # Setup - __enter__
     m0 = p.memory_info()[0] / 2. ** 30
     print(color(f"{label}: start at {start};", color=Colors.blue))
-    print(color(f"RAM USAGE AT START: {m0:.2f} GB" , color=Colors.green))
+    print(color(f"LOCAL RAM USAGE AT START: {m0:.2f} GB" , color=Colors.green))
     try:
         yield  # yield to body of `with` statement
     finally:  # Teardown - __exit__
@@ -128,8 +128,8 @@ def timer(label: str) -> None:
         delta = math.fabs(delta)
         end = time()
         print(color(f"{label}:  done at {end} ({end - start:.2f} secs elapsed);", color=Colors.blue))
-        print(color(f"RAM USAGE AT END:   {m1:.2f}GB ({sign}{delta:.2f}GB)", color=Colors.green))
-
+        print(color(f"LOCAL RAM USAGE AT END:   {m1:.2f}GB ({sign}{delta:.2f}GB)", color=Colors.green))
+        print('\n')
 
 
 def get_memory(num_var=10):
