@@ -39,13 +39,11 @@ DEBUG = True
 TRAIN = True
 PREPROCESS = False
 
-TEST_SIZE = 0.05 # un-used
-
 NUM_SKILLS = 13523 # number of problems
 MAX_SEQ = 180
 ACCEPTED_USER_CONTENT_SIZE = 5
 EMBED_SIZE = 128
-RECENT_SIZE = 40 # recent data in the training loop
+RECENT_SIZE = 24 # recent data in the training loop
 NUM_HEADS = 8
 BATCH_SIZE = 64
 VAL_BATCH_SIZE = 4096
@@ -58,13 +56,13 @@ get_seed(SEED)
 
 #%%
 with timer("Loading train and valid"):
-    # with open(os.path.join(DATA_DIR, 'sakt_group_cv2.pickle'), 'rb') as f:
-    #         train_group = pickle.load(f)
+    with open(os.path.join(DATA_DIR, 'sakt_group_cv2.pickle'), 'rb') as f:
+            group = pickle.load(f)
     # with open(os.path.join(DATA_DIR, 'sakt_group_cv2_valid.pickle'), 'rb') as f:
     #         valid_group = pickle.load(f)
-    with open(os.path.join(DATA_DIR, 'sakt_group.pickle'), 'rb') as f:
-        group = pickle.load(f)
-    train_group, valid_group = train_test_split(group, test_size = TEST_SIZE, random_state=SEED)
+    # with open(os.path.join(DATA_DIR, 'sakt_group.pickle'), 'rb') as f:
+    #     group = pickle.load(f)
+    train_group, valid_group = train_test_split(group, test_size = 0.05, random_state=SEED)
 
 
 #%% EDA on group
@@ -75,7 +73,8 @@ user_length = np.array(user_length)
 user_length = user_length[user_length<100]
 pd.DataFrame(user_length).hist(bins=20)
 # %%
-train_dataset = SAKTDataset(train_group, n_skill=NUM_SKILLS, max_seq=MAX_SEQ,
+train_dataset = SAKTDataset(train_group, 
+                            n_skill=NUM_SKILLS, max_seq=MAX_SEQ,
                             min_seq=ACCEPTED_USER_CONTENT_SIZE, recent_seq=RECENT_SIZE)
 train_dataloader = DataLoader(train_dataset, 
                         batch_size=BATCH_SIZE, 
@@ -88,7 +87,7 @@ val_dataset = SAKTDataset(valid_group, n_skill=NUM_SKILLS, max_seq=MAX_SEQ)
 val_dataloader = DataLoader(val_dataset, 
                         batch_size=VAL_BATCH_SIZE, 
                         shuffle=False)
-print(len(train_dataloader))
+print(len(train_dataloader), len(val_dataloader))
 # %%
 sample_batch = next(iter(train_dataloader))
 print(sample_batch[0].shape, sample_batch[1].shape, sample_batch[2].shape)
@@ -182,7 +181,7 @@ for _ in range(2):
     print(f"Learning rate: {LR} - Batch size: {BATCH_SIZE}")
 
     run_train(lr=LR, epochs=EPOCHS)
-    LR *= 0.5
+    LR /= 0.5
 # %% 
 
 '''

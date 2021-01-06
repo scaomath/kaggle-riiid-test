@@ -54,7 +54,7 @@ TO-DO:
 - [ ] Testing adding a "User growth" feature to the embedding...(maybe not very good as the attention-based model should be more automatic)
 - [ ] Using a multitarget with the second target being the LGBM oof-prediction/other things.
 - [x] Testing a new training strategy using a shifted sequence.
-- [ ] Disable `shuffle` in `train_loader` see if the the CV gets better. 
+- [x] Disable `shuffle` in `train_loader` see if the the CV gets better (not better).  
 
 
 ## LightGBM models
@@ -73,13 +73,13 @@ TO-DO:
 
 ### Features TO-DO:
 
-- [ ] Commonness/difficulty rating of the questions
-- [ ] difficulty-weighted interaction time/gap time
+- [x] Commonness/difficulty rating of the questions
+- [x] difficulty-weighted interaction time/gap time
 - [x] Rolling mean of previous $k$ questions correct or not 
-- [ ] Rolling mean of a feature characterizing the user's streak or readiness/status
+- [x] Rolling mean of a feature characterizing the user's streak or readiness/status
 - [ ] ELO rating of the users
 
 
 
-~~## NN and deeper models~~
+## Neural Net and deeper models
 ~~-  TabNet baseline: no time and inference time limit may exceed.~~

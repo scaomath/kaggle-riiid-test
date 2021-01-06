@@ -244,7 +244,7 @@ def add_features_new(all_data,
         
         
         ####*********  elapsed_time_u_avg_corrected 和 explanation_u_avg_corrected
-        if timestamp!=0 and question_u_count_dict[user_id] !=0:
+        if timestamp!=0:
             ## if timestamp is not zero, then update user question
             # however the first interaction may be a lecture, 
             # question_u_count_dict[user_id] !=0 is just temporary
@@ -254,10 +254,14 @@ def add_features_new(all_data,
                 elapsed_time_u_sum_dict[user_id] += prior_q_elapsed_time*question_u_last_bundle_count_dict[user_id]
                 
                 explanation_u_sum_dict[user_id] += prior_q_had_explanation*question_u_last_bundle_count_dict[user_id]
-            
-            elapsed_time_u_avg[num] = elapsed_time_u_sum_dict[user_id]/question_u_count_dict[user_id]
-            explanation_u_avg[num] = explanation_u_sum_dict[user_id]/question_u_count_dict[user_id]
-            ###⑥只需要当前组的prior（也就是上一组的平均时间或者是否解答），就可以计算了
+
+            if question_u_count_dict[user_id] !=0:
+                elapsed_time_u_avg[num] = elapsed_time_u_sum_dict[user_id]/question_u_count_dict[user_id]
+                explanation_u_avg[num] = explanation_u_sum_dict[user_id]/question_u_count_dict[user_id]
+                ###⑥只需要当前组的prior（也就是上一组的平均时间或者是否解答），就可以计算了
+            else: # first interaction is a lecture
+                elapsed_time_u_avg[num] = np.nan
+                explanation_u_avg[num] = np.nan
         
         else:##时间戳为0的时候，肯定是不知道当前组的用时和解答情况的
             elapsed_time_u_avg[num] = np.nan
@@ -473,9 +477,9 @@ def add_features_new(all_data,
 
 
 #%%
-def add_features_test_new(all_data):
+def add_features_test_new(test_df):
     # user features
-    len_data = len(all_data)
+    len_data = len(test_df)
     
     answered_correctly_u_avg = np.zeros(len_data, dtype = np.float32) # in old version
     answered_correctly_u_count = np.zeros(len_data, dtype = np.float32) # new
@@ -512,7 +516,7 @@ def add_features_test_new(all_data):
 
     flag_current_task = 0
 
-    all_data_temp=all_data[['user_id', # row[0]
+    test_temp=test_df[['user_id', # row[0]
                             'task_container_id', # row[1]
                             'content_id', # row[2]
                             'answered_correctly', # row[3]
@@ -524,7 +528,7 @@ def add_features_test_new(all_data):
                             ]].values
 
     for num in tqdm(range(len_data)):
-        row = all_data_temp[num]
+        row = test_temp[num]
         user_id = row[0]
         task_container_id = row[1]
         content_id = row[2]
@@ -536,13 +540,13 @@ def add_features_test_new(all_data):
         tags = row[8]
 
         if num+1 != len_data:
-            row2 = all_data_temp[num+1]
+            row2 = test_temp[num+1]
         else:
             row2 = [-100 for i in range(len(row))]
         
         
         ####*********  elapsed_time_u_avg_corrected 和 explanation_u_avg_corrected
-        if timestamp!=0 and question_u_count_dict[user_id] !=0:##如果时间戳不是0的时候
+        if timestamp!=0:##如果时间戳不是0的时候
             if flag_current_task==0:
                 question_u_count_dict[user_id] += question_u_last_bundle_count_dict[user_id]
 
@@ -553,6 +557,14 @@ def add_features_test_new(all_data):
             elapsed_time_u_avg[num] = elapsed_time_u_sum_dict[user_id]/question_u_count_dict[user_id]
             explanation_u_avg[num] = explanation_u_sum_dict[user_id]/question_u_count_dict[user_id]
             ###⑥只需要当前组的prior（也就是上一组的平均时间或者是否解答），就可以计算了
+        
+            if question_u_count_dict[user_id] !=0:
+                elapsed_time_u_avg[num] = elapsed_time_u_sum_dict[user_id]/question_u_count_dict[user_id]
+                explanation_u_avg[num] = explanation_u_sum_dict[user_id]/question_u_count_dict[user_id]
+                ###⑥只需要当前组的prior（也就是上一组的平均时间或者是否解答），就可以计算了
+            else: # first interaction is a lecture
+                elapsed_time_u_avg[num] = np.nan
+                explanation_u_avg[num] = np.nan
         
         else:##时间戳为0的时候，肯定是不知道当前组的用时和解答情况的
             elapsed_time_u_avg[num] = np.nan
@@ -694,21 +706,21 @@ def add_features_test_new(all_data):
 
 # %% function for inference
 def update_features(df, 
-                    answered_correctly_u_count_dict,
-                    answered_correctly_u_sum_dict,
-                    answered_correctly_uq_dict,
-                    part_user_count_dict,
-                    part_user_sum_dict,
-                    timestamp_u_correct_dict, 
-                    timestamp_u_incorrect_dict,
-                    question_correct_last_20_count_dict,
-                    question_correct_last_20_sum_dict,
-                    question_correct_last_20_all_dict,
-                    question_correct_last_6_count_dict,
-                    question_correct_last_6_sum_dict,
-                    question_correct_last_6_all_dict,
-                    user_tag_acc_count_dict,
-                    user_tag_acc_sum_dict
+                    # answered_correctly_u_count_dict,
+                    # answered_correctly_u_sum_dict,
+                    # answered_correctly_uq_dict,
+                    # part_user_count_dict,
+                    # part_user_sum_dict,
+                    # timestamp_u_correct_dict, 
+                    # timestamp_u_incorrect_dict,
+                    # question_correct_last_20_count_dict,
+                    # question_correct_last_20_sum_dict,
+                    # question_correct_last_20_all_dict,
+                    # question_correct_last_6_count_dict,
+                    # question_correct_last_6_sum_dict,
+                    # question_correct_last_6_all_dict,
+                    # user_tag_acc_count_dict,
+                    # user_tag_acc_sum_dict
                     ):
 
     list_last_user_task_table=[]####定义数组 用来保存旧组的信息
@@ -853,7 +865,7 @@ features = ['answered_correctly_u_avg',
             'prior_question_elapsed_time',###原始
             'prior_question_had_explanation',###原始
             'question_correct_rate_last_20_mean',
-            'question_correct_rate_last_5_mean',
+            'question_correct_rate_last_6_mean',
             'question_correctly_q_count',###线下
             'question_correctly_q_mean',###线下
             'question_elapsed_time_mean',###线下
@@ -892,14 +904,14 @@ lgb_valid = lgb.Dataset(valid[features].astype(np.float32), label=y_val)
 params = {'objective': 'binary', 
             'seed': SEED,
             'metric': 'auc',
-            'max_bin': 450,
-            'min_child_weight': 0.05,
-            'min_data_in_leaf': 512,
+            'max_bin': 700,
+            # 'min_child_weight': 0.05,
+            # 'min_data_in_leaf': 512,
             'num_leaves': 200,
-            'feature_fraction': 0.7,
+            'feature_fraction': 0.8,
             'learning_rate': 0.05,
-            'bagging_freq': 8,
-            'bagging_fraction': 0.7
+            'subsample_freq': 5,
+            'subsample': 0.8
             }
 
 model = lgb.train(
@@ -953,23 +965,22 @@ with tqdm(total=len_test) as pbar:
     for (test_df, sample_prediction_df) in iter_test:
         if previous_test_df is not None:
             previous_test_df[target] = eval(test_df["prior_group_answers_correct"].iloc[0])
-            update_features(previous_test_df, 
-                    answered_correctly_u_sum_dict,
-                    timestamp_u_correct_dict, 
-                    timestamp_u_incorrect_dict)
+            update_features(previous_test_df)
         previous_test_df = test_df.copy()
         
-        test_df = test_df[test_df['content_type_id'] == 0].reset_index(drop = True)
+        # test_df = test_df[test_df['content_type_id'] == 0].reset_index(drop = True)
         
-        test_df['prior_question_had_explanation'] = \
-        test_df.prior_question_had_explanation.fillna(False).astype('int8')
+        # test_df['prior_question_had_explanation'] = \
+        # test_df.prior_question_had_explanation.fillna(False).astype('int8')
         
-        test_df['prior_question_elapsed_time'].\
-        fillna(prior_question_elapsed_time_mean, inplace = True)
-        test_df = pd.merge(test_df, questions_df[['question_id', 'part']], 
-                        left_on = 'content_id', 
-                        right_on = 'question_id', 
-                        how = 'left')
+        # test_df['prior_question_elapsed_time'].\
+        # fillna(prior_question_elapsed_time_mean, inplace = True)
+        # test_df = pd.merge(test_df, questions_df[['question_id', 'part', 'tags']], 
+        #             left_on = 'content_id', 
+        #             right_on = 'question_id', 
+        #             how = 'left')
+
+        test_df = preprocess_lgb(test_df)
         test_df[target] = 0.66
         
         test_df = add_features_test_new(test_df)
@@ -1087,7 +1098,7 @@ for num in tqdm(range(len_data)):
     
     
     ####*********  elapsed_time_u_avg_xiuzheng和explanation_u_avg_xiuzheng
-    if timestamp != 0 and question_u_count_dict[user_id] !=0:##如果时间戳不是0的时候
+    if timestamp != 0:##如果时间戳不是0的时候
         if flag_current_task==0:
             question_u_count_dict[user_id] += question_u_last_bundle_count_dict[user_id]
 

@@ -928,7 +928,8 @@ def update_stats(train_loss, loss, output, label, num_corrects, num_total, label
 
 def train_epoch(model, dataloader, optim, criterion, scheduler, device='cuda'):
     model.train()
-    
+    train_loss = []
+
     tbar = tqdm(dataloader)
     for idx, item in enumerate(tbar):
         x, target_id, label, target_mask = load_from_item(item, device)
@@ -944,15 +945,18 @@ def train_epoch(model, dataloader, optim, criterion, scheduler, device='cuda'):
         optim.step()
         scheduler.step()
         
+        train_loss.append(loss.item())
         if idx % TQDM_INT ==0:
             lr = optim.param_groups[0]['lr']
-            tbar.set_description(f'Batch loss - {loss:.4f} - Current LR: {lr:.2e}')
+            train_loss_mean = np.mean(train_loss)
+            tbar.set_description(f'Train loss - {train_loss_mean:.6f} - LR: {lr:.3e}')
 
 def train_epoch_weighted(model, dataloader, optim, criterion, scheduler, 
                         device='cuda',
                         recent_weight=RECENT_WEIGHT):
     model.train()
-    
+    train_loss = []
+
     tbar = tqdm(dataloader)
     for idx, item in enumerate(tbar):
         x, target_id, label, target_mask, target_mask_recent = load_from_item_weight(item, device)
@@ -973,9 +977,11 @@ def train_epoch_weighted(model, dataloader, optim, criterion, scheduler,
         optim.step()
         scheduler.step()
         
+        train_loss.append(loss.item())
         if idx % TQDM_INT ==0:
             lr = optim.param_groups[0]['lr']
-            tbar.set_description(f'Batch loss - {loss:.4f} - Current LR: {lr:.2e}')
+            train_loss_mean = np.mean(train_loss)
+            tbar.set_description(f'Train loss - {train_loss_mean:.6f} - LR: {lr:.3e}')
 
 
 def valid_epoch(model, val_iterator, criterion, recent_only=False):
