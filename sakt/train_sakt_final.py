@@ -142,14 +142,14 @@ model = SAKTModel(n_skill=NUM_SKILLS,
 
 # model_name = 'sakt_seq_180_auc_0.7689.pth' # the current best LB one
 # model_name = 'sakt_seq_180_auc_0.7746.pt'
-model_name = 'sakt_seq_180_auc_0.7758.pt' # current best CV 
+model_name = 'sakt_seq_180_auc_0.7759.pt' # current best CV trained on all groups
 model_path = os.path.join(MODEL_DIR, model_name)
 
 model.load_state_dict(torch.load(model_path, map_location=device))
 model.to(device)
 
 #%%
-LR = 1e-4
+LR = 5e-5
 EPOCHS = 2
 RECENT_SIZE = 30
 BATCH_SIZE = 128
@@ -181,7 +181,7 @@ for _ in range(2):
     print(f"Learning rate: {LR} - Batch size: {BATCH_SIZE}")
 
     run_train(lr=LR, epochs=EPOCHS)
-    LR /= 0.5
+    LR *= 0.5
 # %% 
 
 '''
@@ -205,9 +205,10 @@ model = SAKTModel(n_skill=NUM_SKILLS,
                   heads=NUM_HEADS, 
                   dropout=DROPOUT)
 
-model_name = 'sakt_seq_180_auc_0.7689.pth' # the current best LB one
-# model_name = 'sakt_seq_180_auc_0.7746.pt'
-# model_name = 'sakt_seq_180_auc_0.7758.pt' # current best CV 
+# model_name = 'sakt_seq_180_auc_0.7689.pth' # the current best LB one
+# model_name = 'sakt_cv2_seq_180_auc_0.7774.pt' # best CV trained on cv2_train
+model_name = 'sakt_seq_180_auc_0.7759.pt' # current best CV trained on all user_group
+# model_name = 'sakt_seq_180_auc_0.7836.pt' # most likely overfit
 model_path = os.path.join(MODEL_DIR, model_name)
 
 model.load_state_dict(torch.load(model_path, map_location=device))
@@ -223,7 +224,8 @@ predicted = []
 def set_predict(df):
     predicted.append(df)
 # %%
-with tqdm(total=len(all_test_df)) as pbar:
+len_test = len(all_test_df[all_test_df.content_type_id == False])
+with tqdm(total=len_test) as pbar:
     for idx, (test_df, sample_prediction_df) in enumerate(iter_test):
         
         if prev_test_df is not None:
@@ -265,10 +267,10 @@ with tqdm(total=len(all_test_df)) as pbar:
         test_df['answered_correctly'] = preds.cpu().numpy()
         set_predict(test_df.loc[test_df['content_type_id'] == 0, 
                                 ['row_id', 'answered_correctly']])
-        pbar.set_description(f'Current batch test length: {len(test_df)}')
+        pbar.set_description(f'Current batch test length: {len(test_df):<3}')
         pbar.update(len(test_df))
 
-#%%
+
 y_true = all_test_df[all_test_df.content_type_id == 0].answered_correctly
 y_pred = pd.concat(predicted).answered_correctly
 print(f'\nValidation auc:', roc_auc_score(y_true, y_pred))

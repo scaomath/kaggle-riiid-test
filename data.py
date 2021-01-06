@@ -15,8 +15,6 @@ import seaborn as sns
 sns.set()
 DEFAULT_FIG_WIDTH = 20
 sns.set_context("paper", font_scale=1.2) 
-# WORKSPACE_FOLDER=/home/scao/Documents/kaggle-riiid-test
-# PYTHONPATH=${WORKSPACE_FOLDER}:${WORKSPACE_FOLDER}/sakt:${WORKSPACE_FOLDER}/transformer
 
 from sakt import *
 
