@@ -24,7 +24,7 @@ import zipfile
 
 HOME = os.path.abspath(os.path.join('.', os.pardir))
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-print(HOME, '\n', CURRENT_DIR, '\n')
+print(HOME, CURRENT_DIR, '\n')
 MODEL_DIR = os.path.join(HOME,  'model')
 DATA_DIR = os.path.join(HOME,  'data')
 sys.path.append(HOME) 
@@ -80,7 +80,7 @@ TRAIN_COLS = ['timestamp',
             'prior_question_elapsed_time', 
             'prior_question_had_explanation']
 
-DEBUG = True # only using a fraction of the data
+DEBUG = False # only using a fraction of the data
 
 if DEBUG:
     NROWS_TEST = 25_000
@@ -121,7 +121,7 @@ questions_df['bundle_id'] = questions_df['bundle_id'].astype(np.int32)
                 
 with timer("Loading and processing train"):
     train = pd.read_parquet(train_parquet, columns=list(TRAIN_DTYPES.keys()))
-    train = train.iloc[:NROWS_TRAIN]
+    train = train.iloc[-NROWS_TRAIN:]
     train = train.astype(TRAIN_DTYPES)
     train = preprocess_lgb(train)
 
@@ -134,10 +134,27 @@ with timer("Loading and processing valid"):
 prior_question_elapsed_time_mean = 13005.081
 
 #%% loading all train for debugging
-if not DEBUG:
-    with timer("Loading all train data"):
-        all_train = dt.fread(DATA_DIR+'train.csv', 
-                columns=set(TRAIN_DTYPES.keys())).to_pandas().astype(TRAIN_DTYPES)
+# if not DEBUG:
+#     with timer("Loading all train data"):
+#         all_train = dt.fread(DATA_DIR+'train.csv', 
+#                 columns=set(TRAIN_DTYPES.keys())).to_pandas().astype(TRAIN_DTYPES)
+
+
+#%% merging question feature by https://www.kaggle.com/gaozhanfire/offline-group-by-table
+question_feats = [
+                'question_elapsed_time_mean',
+                'question_had_explanation_mean',
+                'question_correctly_q_count',
+                'question_correctly_q_mean',
+                'tags_lsi',
+                'tag_acc_count',
+                'tag_acc_max',
+                'tag_acc_min']
+train = pd.merge(train, questions_feat_df[['content_id'] + question_feats], 
+                    left_on = 'content_id', right_on = 'content_id', how = 'left')
+
+valid = pd.merge(valid, questions_feat_df[['content_id'] + question_feats], 
+                    left_on = 'content_id', right_on = 'content_id', how = 'left')
 #%%
 # user dicts
 answered_correctly_u_count_dict = defaultdict(int)
@@ -853,27 +870,13 @@ print('\nUser feature calculation started...\n')
 len_train = len(train)
 all_data = pd.concat([train, valid], axis=0)
 all_data = add_features_new(all_data)
-train = all_data[:len_train]
-valid = all_data[len_train:]
+train = all_data.iloc[:len_train]
+valid = all_data.iloc[len_train:]
 
-gc.collect()
+del all_data
+gc.collect();
 print('\nUser feature calculation completed...\n')
 
-#%% merging question feature by https://www.kaggle.com/gaozhanfire/offline-group-by-table
-question_feats = [
-                'question_elapsed_time_mean',
-                'question_had_explanation_mean',
-                'question_correctly_q_count',
-                'question_correctly_q_mean',
-                'tags_lsi',
-                'tag_acc_count',
-                'tag_acc_max',
-                'tag_acc_min']
-train = pd.merge(train, questions_feat_df[['content_id'] + question_feats], 
-                    left_on = 'content_id', right_on = 'content_id', how = 'left')
-
-valid = pd.merge(valid, questions_feat_df[['content_id'] + question_feats], 
-                    left_on = 'content_id', right_on = 'content_id', how = 'left')
 
 # %% training and evaluation
     
