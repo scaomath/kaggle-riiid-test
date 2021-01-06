@@ -127,6 +127,33 @@ def preprocess(df,
             .apply(lambda r: (r[CONTENT_ID].values))
     return group
 
+def preprocess_final(df, train_flag=1):
+    '''
+    Train: train_flag=1
+    Valid: train_flag=2
+    Test: train_flag=0
+    Adding timestamp to the group data
+    '''
+
+    df = df[df[CONTENT_TYPE_ID] == False].reset_index(drop = True)    
+
+    if train_flag == 1:
+        df = df.sort_values([TIMESTAMP], ascending=True).reset_index(drop = True)
+
+    df = df[df[CONTENT_TYPE_ID] == False]
+    
+    if train_flag: # timestamp is to split the sequence
+        group = df[[USER_ID, CONTENT_ID, TARGET, TIMESTAMP]]\
+            .groupby(USER_ID)\
+            .apply(lambda r: (r[CONTENT_ID].values, 
+                              r[TARGET].values,
+                              r[TIMESTAMP].values))
+    else: # for the test, timestamp is not necessary
+        group = df[[USER_ID, CONTENT_ID]]\
+            .groupby(USER_ID)\
+            .apply(lambda r: (r[CONTENT_ID].values))
+    return group
+
 
 def preprocess_sakt(df, train_flag=1, label_smoothing=False, smoothing_factor=0.2, label_sm=None):
     '''

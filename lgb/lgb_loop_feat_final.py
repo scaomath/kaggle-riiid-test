@@ -918,10 +918,10 @@ features = ['answered_correctly_u_avg',
 #%% 
 print(f'Before drop train: {train.shape[0]} rows and {len(features)} features')   
 
-if not DEBUG:
-    train = train[:NROWS_TRAIN//2]
-    valid = valid[:NROWS_VAL//2]
-    gc.collect();
+# if not DEBUG:
+#     train = train[:NROWS_TRAIN//2]
+#     valid = valid[:NROWS_VAL//2]
+#     gc.collect();
 
 drop_cols = list(set(train.columns).difference(features))
 y_train = train[target].values.astype('int8')
@@ -934,8 +934,9 @@ gc.collect();
 lgb_train = lgb.Dataset(train[features].astype(np.float32), label=y_train)
 lgb_valid = lgb.Dataset(valid[features].astype(np.float32), label=y_val)
 
-# del train, y_train
-# gc.collect();
+#%%
+del train, y_train
+gc.collect();
 #%%
 params = {'objective': 'binary', 
             'seed': SEED,
@@ -943,11 +944,12 @@ params = {'objective': 'binary',
             'max_bin': 700,
             # 'min_child_weight': 0.05,
             # 'min_data_in_leaf': 512,
-            'num_leaves': 200,
-            'feature_fraction': 0.8,
+            'num_leaves': 250,
+            'feature_fraction': 0.75,
             'learning_rate': 0.05,
             'subsample_freq': 5,
-            'subsample': 0.8
+            'subsample': 0.8,
+            'max_depth': 12
             }
 
 model = lgb.train(
@@ -956,7 +958,7 @@ model = lgb.train(
     num_boost_round = 5000,
     valid_sets = [lgb_train, lgb_valid],
     early_stopping_rounds = 50,
-    verbose_eval = 50
+    verbose_eval = 20
 )
 val_auc = roc_auc_score(y_val, model.predict(valid[features]))
 print(f'AUC score for the validation data is: {val_auc:.4f}')
