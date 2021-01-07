@@ -180,9 +180,6 @@ train_group, valid_group = train_test_split(group, test_size=0.1)
 
 # %%
 class SAINTDataset(Dataset):
-    '''
-    Only for validation
-    '''
     def __init__(self, group, n_skill, 
                         max_seq=MAX_SEQ, 
                         min_seq=ACCEPTED_USER_CONTENT_SIZE,
@@ -313,7 +310,6 @@ model = SAINTModel(n_skill=NUM_SKILLS,
                     nhead=NUM_HEADS,
                     nlayer=NUM_LAYERS)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 n_params = get_num_params(model)
 print(f"Current model has {n_params} parameters running on {device}.")
@@ -361,7 +357,7 @@ def train_epoch(model, dataloader, optim, criterion, scheduler, device='cuda'):
         train_loss_mean = np.mean(train_loss)
         tbar.set_description(f'Train loss - {train_loss_mean:.6f} - LR: {lr:.3e}')
 
-def valid_epoch(model, val_iterator, criterion):
+def valid_epoch(model, val_iterator, criterion, device='cuda'):
     model.eval()
 
     val_loss = []
@@ -382,7 +378,7 @@ def valid_epoch(model, val_iterator, criterion):
 
         loss = criterion(output, label)
         
-        num_corrects, num_total = update_stats(train_loss, loss, 
+        num_corrects, num_total = update_stats(val_loss, loss, 
                                                output, label, 
                                                num_corrects,num_total, 
                                                labels, outs)
@@ -416,7 +412,7 @@ def run_train(lr=1e-3, epochs=10, device='cuda'):
             f'saint_seq_{MAX_SEQ}_auc_{val_auc:.4f}.pt'))
 # %%
 
-LR = 1e-3
+LR = 5e-4
 EPOCHS = 2
 run_train(lr=LR, epochs=EPOCHS)
 # %%

@@ -1,6 +1,9 @@
 # Kaggle Riiid Test Answer Correctness
 Playground for [Kaggle competition Riiid! Answer Correctness Prediction](https://www.kaggle.com/c/riiid-test-answer-prediction)
 
+## Final result
+Bronze medal...due to several high local CV model cannot be submitted in the last day.
+
 ## EDA, observations, ideas
 - In the CV tito and marisakamozz proposed, the test iterator df is sorted by `virtual_timestamp`, which is nice.
 - Currently many features do `fillna` using the mean for all users, how about the `fillna` just for one user? 
