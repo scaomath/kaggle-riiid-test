@@ -70,8 +70,8 @@ NROWS_TRAIN_START = 12_000_000
 NROWS_TEST = 50_000
 # MODEL_DIR = f'/home/scao/Documents/kaggle-riiid-test/model/'
 # DATA_DIR = '/home/scao/Documents/kaggle-riiid-test/data/'
-DEBUG = True
-TRAIN = False
+DEBUG = False
+TRAIN = True
 # %%
 with timer("Loading train"):
     if DEBUG:
@@ -80,10 +80,11 @@ with timer("Loading train"):
         train_df = train_df[NROWS_TRAIN_START:NROWS_TRAIN_START+NROWS_TRAIN]
         
     else:
-        train_df = pd.read_parquet(DATA_DIR+'cv5_train.parquet',
-                                    columns=list(TRAIN_DTYPES.keys()))
-        train_df = train_df.astype(TRAIN_DTYPES)
-        train_df = train_df[:40_000_000]
+        # train_df = pd.read_parquet(DATA_DIR+'cv2_train.parquet',
+        #                             columns=list(TRAIN_DTYPES.keys())).astype(TRAIN_DTYPES)
+        # train_df = train_df[-40_000_000:]
+        train_df = dt.fread(DATA_DIR+'train.csv', 
+                    columns=set(TRAIN_DTYPES.keys())).to_pandas().astype(TRAIN_DTYPES)
 gc.collect()    
 # %%
 
@@ -317,7 +318,6 @@ questions_df['content_sub_bundle'] = questions_df['bundle_id'].map(bundle_agg['c
 
 questions_df['tags'].fillna('188', inplace=True) # why 188?
 
-#%%
 
 
 #%%
@@ -460,65 +460,26 @@ features_dict = {
     'tags3': 'int8',
     'tags4': 'int8',
     'tags5': 'int8',
-   # 'tags6': 'int8',
-   # 'tags7': 'int8',
-#     'tags0_correctness_mean':'float16',
-#     'tags1_correctness_mean':'float16',
-#     'tags2_correctness_mean':'float16',
-#     'tags4_correctness_mean':'float16',
-#     'bundle_id':'int16',
-#     'bundle_correctness_mean':'float16',
-#     'bundle_uncor_count':'int32',
-#     'bundle_cor_count':'int32',
     'part_bundle_id':'int32',
     'content_sub_bundle':'int8',
     'prior_question_had_explanation':'int8',
     'explanation_mean':'float16', #
-    #'explanation_var',#
     'explanation_false_count':'int16',#
     'explanation_true_count':'int16',#
-   # 'community':'int8',
-#     'part_1',
-#     'part_2',
-#     'part_3',
-#     'part_4',
-#     'part_5',
-#     'part_6',
-#     'part_7',
-#     'type_of_concept',
-#     'type_of_intention',
-#     'type_of_solving_question',
-#     'type_of_starter'
 }
 categorical_columns= [
-    #'user_id',
     'content_id',
     'task_container_id',
     'part',
-   # 'community',
     'tags0',
     'tags1',
     'tags2',
     'tags3',
     'tags4',
     'tags5',
-    #'tags6',
-    #'tags7',
-    #'bundle_id',
     'part_bundle_id',
     'content_sub_bundle',
     'prior_question_had_explanation', 
-#     'part_1',
-#     'part_2',
-#     'part_3',
-#     'part_4',
-#     'part_5',
-#     'part_6',
-#     'part_7',
-#     'type_of_concept',
-#     'type_of_intention',
-#     'type_of_solving_question',
-#     'type_of_starter'
 ]
 
 features=list(features_dict.keys())
@@ -528,8 +489,8 @@ clfs = list()
 trains=list()
 valids=list()
 
-# train_df_clf = train_df[NROWS_TRAIN_START:NROWS_TRAIN_START+NROWS_TRAIN]
-train_df_clf=train_df.copy()
+train_df_clf = train_df[-40_000_000:]
+# train_df_clf=train_df.copy()
 
 del train_df
 gc.collect()
@@ -577,7 +538,7 @@ gc.collect()
 
 print('train_df length：',len(train_df_clf))
 print('valid_df length：',len(valid_df))
-print("Number of features: ", len(train_df_clf.columns))
+print("Number of columns: ", len(train_df_clf.columns))
 trains.append(train_df_clf)
 valids.append(valid_df)
 #%%
@@ -586,19 +547,18 @@ gc.collect()
     #train_df=train_df.reset_index(drop=True)
 #%%
 
-params = {
-            'num_leaves': 100,
-            'max_bin': 200,
-            'min_child_weight': 0.05,
-            'feature_fraction': 0.6,
-            'bagging_fraction': 0.58,
-            'min_data_in_leaf': 512,
-            'objective': 'binary',
-            'max_depth': -1,
-            'learning_rate': 0.05,
+params = {  'objective': 'binary',
+            "metric": 'auc',
+            'num_leaves': 160,
+            'max_bin': 500,
+            # 'min_child_weight': 0.05,
+            'feature_fraction': 0.75,
+            # 'bagging_fraction': 0.58,
+            'min_data_in_leaf': 1024,
+            'max_depth': 12,
+            'learning_rate': 0.1,
             "boosting_type": "gbdt",
             "bagging_seed": 802,
-            "metric": 'auc',
             "verbosity": -1,
             'lambda_l1': 2,
             'lambda_l2': 0.6,
@@ -634,7 +594,7 @@ if TRAIN:
             early_stopping_rounds=50,
             feature_name=features,
             categorical_feature=categorical_columns,
-            verbose_eval=50
+            verbose_eval=10
         )
         val_auc = model.best_score['valid_1']['auc']
         model.save_model(MODEL_DIR+f'lgb_base_fold_{i}_auc_{val_auc:.4f}.txt')   

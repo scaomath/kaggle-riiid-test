@@ -1,4 +1,3 @@
-#%%
 import os
 import gc
 import sys
@@ -69,16 +68,16 @@ def main_sakt(data_name = 'train.csv'):
     with timer("Processing data"):
         data_df = data_df[data_df[CONTENT_TYPE_ID] == False]
         data_df = data_df.sort_values([TIMESTAMP], ascending=True).reset_index(drop = True)
-        group = data_df[[USER_ID, CONTENT_ID, TARGET]]\
+        group = data_df[[USER_ID, CONTENT_ID, TARGET, TIMESTAMP]]\
                     .groupby(USER_ID)\
                     .apply(lambda r: (r[CONTENT_ID].values, 
-                                    r[TARGET].values))
+                                     r[TARGET].values,
+                                     r[TIMESTAMP].values))
     print('\n')
     with timer("Dumping user group to pickle"):
-        with open(os.path.join(DATA_DIR, f'sakt_group_{filename}.pickle'), 'wb') as f:
+        with open(os.path.join(DATA_DIR, f'sakt_group_{filename}_timed.pickle'), 'wb') as f:
             pickle.dump(group, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 if __name__ == "__main__":
-    main_sakt('cv2_valid.parquet')
+    main_sakt('cv2_train.parquet')
 
-# %%

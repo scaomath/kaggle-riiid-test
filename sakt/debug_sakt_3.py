@@ -55,6 +55,7 @@ TEST_SIZE = 0.05
 NUM_SKILLS = 13523 # number of problems
 MAX_SEQ = 180
 ACCEPTED_USER_CONTENT_SIZE = 5
+RECENT_SIZE = 10
 EMBED_SIZE = 128
 NUM_HEADS = 8
 BATCH_SIZE = 64
@@ -144,11 +145,15 @@ class SAKTDataset(Dataset):
         
         self.user_ids = []
         for i, user_id in enumerate(group.index):
+            
             content_id, answered_correctly, timestamp = group[user_id]
 
             if len(content_id) >= self.min_seq:
 
                 if len(content_id) > self.max_seq:
+                    '''
+                    Case 1: longer than max_seq, break into sub-seqs.
+                    '''
                     total_questions = len(content_id)
                     num_seq_user = total_questions // self.max_seq
                     for seq in range(num_seq_user):
@@ -156,96 +161,250 @@ class SAKTDataset(Dataset):
                         self.user_ids.append(index)
                         start = seq * self.max_seq
                         end = (seq + 1) * self.max_seq
-                        # timestamp[end-1] the original last entry's timestamp
-                        # the difference with previous entry should be bigger than a threshold
-                        # otherwise they may be in the same test_df batch
+                        '''
+                        New contribution #2:
+                        timestamp[end-1] the original last entry's timestamp
+                        the difference with previous entry should be bigger than a threshold
+                        otherwise they may be in the same test_df batch
+                        '''
                         idx_same_bundle = []
                         while timestamp[end-1] - timestamp[end-2] < self.gap and end-start >= self.min_seq:
                             if timestamp[end-1] == timestamp[end-2]:
                                 idx_same_bundle.append(end-1)
                             end -= 1     
-                        self.samples[index] = (content_id[start:end], answered_correctly[start:end])
+                        self.samples[index] = (content_id[start:end], 
+                                               answered_correctly[start:end],
+                                               timestamp[start:end]
+                                               )
                         
                         if idx_same_bundle and end-1-start >= self.min_seq: 
                             # seeing multiple questions at a time, this list is not empty
-                            for i, idx in enumerate(idx_same_bundle):
-                                index = f"{user_id}_{seq}_{i}"
+                            for j, idx in enumerate(idx_same_bundle):
+                                index = f"{user_id}_{seq}_{j}"
                                 self.user_ids.append(index)
                                 self.samples[index] = (np.r_[content_id[start:end-1], content_id[idx]], 
-                                                       np.r_[answered_correctly[start:end-1], content_id[idx]])
-
+                                                       np.r_[answered_correctly[start:end-1], answered_correctly[idx]],
+                                                       np.r_[timestamp[start:end-1], timestamp[idx]]
+                                                       )
+                    '''
+                    left-over sequence
+                    '''
                     content_id_last = content_id[end:]
+                    answered_correctly_last = answered_correctly[end:]
                     timestamp_last = timestamp[end:]
                     end = len(content_id_last)
-                    if end >= self.min_seq:
+
+                    if end >= self.min_seq and end <= self.max_seq:
+                        idx_same_bundle = []
                         while timestamp_last[end-1] - timestamp_last[end-2] < self.gap and end >= self.min_seq:
+                            if timestamp_last[end-1] == timestamp_last[end-2]:
+                                idx_same_bundle.append(end-1)
                             end -= 1
+
                         index = f"{user_id}_{num_seq_user + 1}"
                         self.user_ids.append(index)
-                        self.samples[index] = (content_id_last[:end], content_id_last[:end])
-                else:
+                        self.samples[index] = (content_id_last[:end], 
+                                               answered_correctly_last[:end],
+                                               timestamp_last[:end]
+                                               )
+
+                        if idx_same_bundle and end >= self.min_seq: 
+                            # seeing multiple questions at a time, this list is not empty
+                            for j, idx in enumerate(idx_same_bundle):
+                                index = f"{user_id}_{num_seq_user + 1}_{j}"
+                                self.user_ids.append(index)
+                                self.samples[index] = (np.r_[content_id_last[:end-1], content_id_last[idx]], 
+                                                       np.r_[answered_correctly_last[:end-1], answered_correctly_last[idx]],
+                                                       np.r_[timestamp_last[:end-1], timestamp_last[idx]]
+                                                       )
+                else: # len(content_id) <= self.max_seq
+                    '''
+                    Case 2: shorter than max_seq, keep them all
+                    '''
                     index = f'{user_id}'
                     end = len(timestamp)
+                    idx_same_bundle = []
                     # last time stamp diff should be bigger than a threshold
                     while timestamp[end-1] - timestamp[end-2] < self.gap and end >= self.min_seq:
+                        if timestamp[end-1] == timestamp[end-2]:
+                                idx_same_bundle.append(end-1)
                         end -= 1
                     self.user_ids.append(index)
-                    self.samples[index] = (content_id[:end], answered_correctly[:end])
+                    self.samples[index] = (content_id[:end], 
+                                           answered_correctly[:end],
+                                           timestamp[:end],
+                                           )
+
+                    if idx_same_bundle and end >= self.min_seq: 
+                        # seeing multiple questions at a time, this list is not empty
+                        for j, idx in enumerate(idx_same_bundle):
+                            index = f"{user_id}_{j}"
+                            self.user_ids.append(index)
+                            self.samples[index] = (np.r_[content_id[:end-1], content_id[idx]], 
+                                                   np.r_[answered_correctly[:end-1], answered_correctly[idx]],
+                                                   np.r_[timestamp[:end-1], timestamp[idx]]
+                                                   )
             '''
-            New: adding a shifted sequence
+            New contribution #1
+            Adding a shifted sequence, now train_loader has much more sequences per epoch
             '''
-            if len(content_id) >= self.recent_seq: #
-                for i in range(1, self.recent_seq//2): # adding a shifted sequence
+            if len(content_id) >= 2*self.recent_seq: #
+                for i in range(1, self.recent_seq): # adding a shifted sequence
                     '''
-                    generating much much more sequences by truncating
+                    Shifting cases:
+                    generating much much more sequences by shifting the last few entries
                     '''
-                    content_id_truncated_end = content_id[:-i]
-                    answered_correctly_truncated_end = answered_correctly[:-i]
-                    if len(content_id_truncated_end) >= self.min_seq:
-                        if len(content_id_truncated_end) > self.max_seq:
-                            total_questions_2 = len(content_id_truncated_end)
+                    content_id_shift = content_id[:-i]
+                    answered_correctly_shift = answered_correctly[:-i]
+                    timestamp_shift = timestamp[:-i]
+                    if len(content_id_shift) >= self.min_seq:
+                        if len(content_id_shift) > self.max_seq:
+                            '''
+                            Case S 1: shifted seq greater than max_seq, break into pieces
+                            '''
+                            total_questions_2 = len(content_id_shift)
                             num_seq_user = total_questions_2 // self.max_seq
+
                             for seq in range(num_seq_user):
-                                index = f"{user_id}_{seq}_{i}_2"
+
+                                index = f"{user_id}_{seq}_{i}_s"
                                 self.user_ids.append(index)
                                 start = seq * self.max_seq
                                 end = (seq + 1) * self.max_seq
-                                self.samples[index] = (content_id_truncated_end[start:end], 
-                                                    answered_correctly_truncated_end[start:end])
-                            if len(content_id_truncated_end[end:]) >= self.min_seq:
-                                index = f"{user_id}_{num_seq_user + 1}_{i}_2"
+
+                                idx_same_bundle = []
+                                while timestamp_shift[end-1] - timestamp_shift[end-2] < self.gap and end-start >= self.min_seq:
+                                    if timestamp_shift[end-1] == timestamp_shift[end-2]:
+                                        idx_same_bundle.append(end-1)
+                                    end -= 1
+
+                                self.samples[index] = (content_id_shift[start:end], 
+                                                       answered_correctly_shift[start:end],
+                                                       timestamp_shift[start:end]
+                                                       )
+
+                                if idx_same_bundle and end-1-start >= self.min_seq: 
+                                    # seeing multiple questions at a time, this list is not empty
+                                    for j, idx in enumerate(idx_same_bundle):
+                                        index = f"{user_id}_{seq}_{i}_s_{j}"
+                                        self.user_ids.append(index)
+                                        self.samples[index] = (np.r_[content_id_shift[start:end-1], content_id_shift[idx]], 
+                                        np.r_[answered_correctly_shift[start:end-1], answered_correctly_shift[idx]],
+                                        np.r_[timestamp_shift[start:end-1], timestamp_shift[idx]]
+                                        )
+                            '''
+                            left-over sequence
+                            '''
+                            content_id_last = content_id_shift[end:]
+                            answered_correctly_last = answered_correctly_shift[end:]
+                            timestamp_last = timestamp_shift[end:]
+                            end = len(content_id_last)              
+                            if end >= self.min_seq and end <= self.max_seq:
+                                idx_same_bundle = []
+                                while timestamp_last[end-1] - timestamp_last[end-2] < self.gap and end >= self.min_seq:
+                                    if timestamp_last[end-1] == timestamp_last[end-2]:
+                                        idx_same_bundle.append(end-1)
+                                    end -= 1
+
+                                index = f"{user_id}_{num_seq_user + 1}_{i}_s"
                                 self.user_ids.append(index)
-                                self.samples[index] = (content_id_truncated_end[end:], 
-                                                    answered_correctly_truncated_end[end:])
-                        else:
-                            index = f'{user_id}_{i}_2'
+                                self.samples[index] = (content_id_last[:end], 
+                                                       answered_correctly_last[:end],
+                                                       timestamp_last[:end]
+                                                       )
+
+                                if idx_same_bundle and end >= self.min_seq: 
+                                    # seeing multiple questions at a time, this list is not empty
+                                    for j, idx in enumerate(idx_same_bundle):
+                                        index = f"{user_id}_{num_seq_user + 1}_{i}_s_{j}"
+                                        self.user_ids.append(index)
+                                        self.samples[index] = (np.r_[content_id_last[:end-1], content_id_last[idx]], 
+                                        np.r_[answered_correctly_last[:end-1], answered_correctly_last[idx]],
+                                        np.r_[timestamp_last[:end-1], timestamp_last[idx]]
+                                        )
+                        else: #len(content_id_shift) <= self.max_seq
+                            '''
+                            Case S 2: shifted seq less than or equal to max_seq
+                            '''
+                            index = f'{user_id}_{i}_s'
+                            end = len(timestamp_shift)
+                            idx_same_bundle = []
+                            # last time stamp diff should be bigger than a threshold
+                            while timestamp_shift[end-1] - timestamp_shift[end-2] < self.gap and end >= self.min_seq:
+                                if timestamp_shift[end-1] == timestamp_shift[end-2]:
+                                        idx_same_bundle.append(end-1)
+                                end -= 1
                             self.user_ids.append(index)
-                            self.samples[index] = (content_id_truncated_end, 
-                                                   answered_correctly_truncated_end)
+                            self.samples[index] = (content_id_shift[:end], 
+                                                   answered_correctly_shift[:end],
+                                                   timestamp_shift[:end]
+                                                   )
+
+                            if idx_same_bundle and end >= self.min_seq: 
+                                # seeing multiple questions at a time, this list is not empty
+                                for j, idx in enumerate(idx_same_bundle):
+                                    index = f"{user_id}_{i}_s_{j}"
+                                    self.user_ids.append(index)
+                                    self.samples[index] = (np.r_[content_id_shift[:end-1], content_id_shift[idx]], 
+                                                           np.r_[answered_correctly_shift[:end-1], answered_correctly_shift[idx]],
+                                                           np.r_[timestamp_shift[:end-1], timestamp_shift[idx]]
+                                                           )
                 
     def __len__(self):
         return len(self.user_ids)
 
     def __getitem__(self, index):
         user_id = self.user_ids[index]
-        content_id, answered_correctly = self.samples[user_id]
+        # content_id, answered_correctly = self.samples[user_id]
+        content_id, answered_correctly, timestamp = self.samples[user_id]
         seq_len = len(content_id)
         
         content_id_seq = np.zeros(self.max_seq, dtype=int)
         answered_correctly_seq = np.zeros(self.max_seq, dtype=int)
+        timestamp_seq = np.zeros(self.max_seq, dtype=int)
 
         if seq_len >= self.max_seq:
             content_id_seq[:] = content_id[-self.max_seq:]
             answered_correctly_seq[:] = answered_correctly[-self.max_seq:]
+            timestamp_seq[:] = timestamp[-self.max_seq:]
         else:
             content_id_seq[-seq_len:] = content_id
             answered_correctly_seq[-seq_len:] = answered_correctly
+            timestamp_seq[-seq_len:] = timestamp
             
         target_id = content_id_seq[1:] # question including the current one
-        label = answered_correctly_seq[1:]
-        
+        label = answered_correctly_seq[1:] # answers including the current
+        timestamp = timestamp_seq[1:] # timestamp including the current
+
         x = content_id_seq[:-1].copy() # question till the previous one
-        # encoded answers till the previous one
+        # encoded answers till the previous one as the past correctly answering seq
         x += (answered_correctly_seq[:-1] == 1) * self.n_skill
         
-        return x, target_id, label
+        return x, target_id, label, timestamp
+# %%
+train_dataset = SAKTDataset(train_group, 
+                            n_skill=NUM_SKILLS, 
+                            max_seq=MAX_SEQ,
+                            min_seq=ACCEPTED_USER_CONTENT_SIZE, 
+                            recent_seq=RECENT_SIZE,
+                            gap=TIMESTAMP_GAP)
+train_dataloader = DataLoader(train_dataset, 
+                        batch_size=BATCH_SIZE, 
+                        shuffle=(not DEBUG), 
+                        drop_last=True)
+
+
+val_dataset = SAKTDataset(valid_group, n_skill=NUM_SKILLS, max_seq=MAX_SEQ)
+val_dataloader = DataLoader(val_dataset, 
+                            batch_size=VAL_BATCH_SIZE, 
+                            shuffle=False)
+print(len(train_dataloader), len(val_dataloader))
+# %%
+sample_batch = next(iter(train_dataloader))
+print(sample_batch[0].shape) # encoded skills 
+print(sample_batch[1].shape) # question sequence
+print(sample_batch[2].shape) # labels
+print(sample_batch[3].shape) # timestamp
+# %%
+
+# %%

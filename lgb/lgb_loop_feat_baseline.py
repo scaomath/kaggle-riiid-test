@@ -528,9 +528,7 @@ with tqdm(total=len_test) as pbar:
         set_predict(test_df.loc[:,['row_id', target]])
         pbar.update(len(test_df))
 
-print('\nJob Done')
 
-#%%
 y_true = valid_df[valid_df.content_type_id == 0][target]
 y_pred = pd.concat(predicted)[target]
 print('\nValidation auc:', roc_auc_score(y_true, y_pred))

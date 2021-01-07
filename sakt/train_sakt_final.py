@@ -35,7 +35,7 @@ get_system()
 from sakt import *
 from iter_env import *
 # %%
-DEBUG = True
+DEBUG = False
 TRAIN = True
 PREPROCESS = False
 
@@ -43,7 +43,8 @@ NUM_SKILLS = 13523 # number of problems
 MAX_SEQ = 180
 ACCEPTED_USER_CONTENT_SIZE = 5
 EMBED_SIZE = 128
-RECENT_SIZE = 24 # recent data in the training loop
+RECENT_SIZE = 10 # recent data in the training loop
+TIMESTAMP_GAP = 20_000
 NUM_HEADS = 8
 BATCH_SIZE = 64
 VAL_BATCH_SIZE = 4096
@@ -56,7 +57,7 @@ get_seed(SEED)
 
 #%%
 with timer("Loading train and valid"):
-    with open(os.path.join(DATA_DIR, 'sakt_group_cv2.pickle'), 'rb') as f:
+    with open(os.path.join(DATA_DIR, 'sakt_group_cv2_timed.pickle'), 'rb') as f:
             group = pickle.load(f)
     # with open(os.path.join(DATA_DIR, 'sakt_group_cv2_valid.pickle'), 'rb') as f:
     #         valid_group = pickle.load(f)
@@ -70,27 +71,30 @@ user_length = []
 for item in group.items():
     user_length.append(len(item[1][0]))
 user_length = np.array(user_length)
-user_length = user_length[user_length<100]
-pd.DataFrame(user_length).hist(bins=20)
+# user_length = user_length[user_length<100]
+# pd.DataFrame(user_length).hist(bins=20)
 # %%
 train_dataset = SAKTDataset(train_group, 
-                            n_skill=NUM_SKILLS, max_seq=MAX_SEQ,
-                            min_seq=ACCEPTED_USER_CONTENT_SIZE, recent_seq=RECENT_SIZE)
+                            n_skill=NUM_SKILLS, 
+                            max_seq=MAX_SEQ,
+                            min_seq=ACCEPTED_USER_CONTENT_SIZE, 
+                            recent_seq=RECENT_SIZE,
+                            gap=TIMESTAMP_GAP)
 train_dataloader = DataLoader(train_dataset, 
                         batch_size=BATCH_SIZE, 
                         shuffle=True, 
-                        # shuffle=False,
                         drop_last=True)
 
 
-val_dataset = SAKTDataset(valid_group, n_skill=NUM_SKILLS, max_seq=MAX_SEQ)
+val_dataset = SAKTValDataset(valid_group, n_skill=NUM_SKILLS, max_seq=MAX_SEQ)
 val_dataloader = DataLoader(val_dataset, 
-                        batch_size=VAL_BATCH_SIZE, 
-                        shuffle=False)
+                            batch_size=VAL_BATCH_SIZE, 
+                            shuffle=False)
 print(len(train_dataloader), len(val_dataloader))
 # %%
-sample_batch = next(iter(train_dataloader))
-print(sample_batch[0].shape, sample_batch[1].shape, sample_batch[2].shape)
+with timer("generating a batch"):
+    sample_batch = next(iter(train_dataloader))
+    print(sample_batch[0].shape, sample_batch[1].shape, sample_batch[2].shape)
 
 #%%
 model = SAKTModel(NUM_SKILLS, 
@@ -131,6 +135,8 @@ def run_train(lr=1e-3, epochs=10, device='cuda'):
 LR = 1e-3
 EPOCHS = 2
 run_train(lr=LR, epochs=EPOCHS)
+
+
 #%%
 model = SAKTModel(n_skill=NUM_SKILLS, 
                   max_seq=MAX_SEQ, 
@@ -140,49 +146,53 @@ model = SAKTModel(n_skill=NUM_SKILLS,
                   heads=NUM_HEADS, 
                   dropout=DROPOUT)
 
+# model_name = 'sakt_seq_180_auc_0.7664.pt' # trained using new strategy
 # model_name = 'sakt_seq_180_auc_0.7689.pth' # the current best LB one
-model_name = 'sakt_seq_180_auc_0.7758.pt' # tie the best LB one
+model_name = 'sakt_seq_180_auc_0.77583.pt' # tie the best LB one
 # model_name = 'sakt_seq_180_auc_0.7746.pt'
 # model_name = 'sakt_seq_180_auc_0.7759.pt' # current best CV trained on all groups
 model_path = os.path.join(MODEL_DIR, model_name)
 
 model.load_state_dict(torch.load(model_path, map_location=device))
 model.to(device)
-
 #%%
-LR = 5e-5
+LR = 1e-5
 EPOCHS = 2
-RECENT_SIZE = 30
-BATCH_SIZE = 128
+run_train(lr=LR, epochs=EPOCHS)
+#%%
+# LR = 5e-5
+# EPOCHS = 2
+# RECENT_SIZE = 30
+# BATCH_SIZE = 128
 
-for _ in range(2):
+# for _ in range(2):
 
-    ACCEPTED_USER_CONTENT_SIZE += 1
-    RECENT_SIZE -= 2
+#     ACCEPTED_USER_CONTENT_SIZE += 1
+#     RECENT_SIZE -= 2
 
-    train_dataset = SAKTDataset(train_group, 
-                            n_skill=NUM_SKILLS, 
-                            max_seq=MAX_SEQ,
-                            min_seq=ACCEPTED_USER_CONTENT_SIZE, 
-                            recent_seq=RECENT_SIZE)
-    train_dataloader = DataLoader(train_dataset, 
-                            batch_size=BATCH_SIZE, 
-                            shuffle=True, 
-                            drop_last=True)
+#     train_dataset = SAKTDataset(train_group, 
+#                             n_skill=NUM_SKILLS, 
+#                             max_seq=MAX_SEQ,
+#                             min_seq=ACCEPTED_USER_CONTENT_SIZE, 
+#                             recent_seq=RECENT_SIZE)
+#     train_dataloader = DataLoader(train_dataset, 
+#                             batch_size=BATCH_SIZE, 
+#                             shuffle=True, 
+#                             drop_last=True)
 
 
-    val_dataset = SAKTDataset(valid_group, 
-                              n_skill=NUM_SKILLS, 
-                              max_seq=MAX_SEQ)
-    val_dataloader = DataLoader(val_dataset, 
-                            batch_size=VAL_BATCH_SIZE, 
-                            shuffle=False)
+#     val_dataset = SAKTDataset(valid_group, 
+#                               n_skill=NUM_SKILLS, 
+#                               max_seq=MAX_SEQ)
+#     val_dataloader = DataLoader(val_dataset, 
+#                             batch_size=VAL_BATCH_SIZE, 
+#                             shuffle=False)
     
-    print(f"\n\nLength of the train loader: {len(train_dataloader)}")
-    print(f"Learning rate: {LR} - Batch size: {BATCH_SIZE}")
+#     print(f"\n\nLength of the train loader: {len(train_dataloader)}")
+#     print(f"Learning rate: {LR} - Batch size: {BATCH_SIZE}")
 
-    run_train(lr=LR, epochs=EPOCHS)
-    LR *= 0.5
+#     run_train(lr=LR, epochs=EPOCHS)
+#     LR *= 0.5
 # %% 
 
 '''
@@ -206,12 +216,15 @@ model = SAKTModel(n_skill=NUM_SKILLS,
                   heads=NUM_HEADS, 
                   dropout=DROPOUT)
 
+# model_name = 'sakt_seq_180_auc_0.7664.pt' # trained using new strategy
 # model_name = 'sakt_seq_180_auc_0.7689.pth' # the current best LB one
 # model_name = 'sakt_cv2_seq_180_auc_0.7774.pt' # best CV trained on cv2_train
-model_name = 'sakt_seq_180_auc_0.7759.pt' # current best CV trained on all user_group
+# model_name = 'sakt_seq_180_auc_0.7759.pt' # current best CV trained on all user_group but LB is bad
 # model_name = 'sakt_seq_180_auc_0.7836.pt' # most likely overfit
+model_name = 'sakt_seq_180_auc_0.7788.pt' # best CV trained on cv2_train
 model_path = os.path.join(MODEL_DIR, model_name)
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.load_state_dict(torch.load(model_path, map_location=device))
 model.to(device)
 model.eval()

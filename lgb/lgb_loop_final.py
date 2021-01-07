@@ -2,7 +2,6 @@
 import os
 import numpy as np
 import pandas as pd
-import datatable as dt
 from collections import defaultdict
 import datatable as dt
 import lightgbm as lgb
@@ -46,7 +45,8 @@ pd.set_option('max_colwidth', 20)
 # %%
 '''
 Version notes:
-Generating user dictionaries and verifying iter_env
+1. Testing new features from 
+https://www.kaggle.com/gaozhanfire/riiid-lgbm-val-0-788-feature-importance-updated
 '''
 
 
@@ -85,15 +85,14 @@ DEBUG = False # only using a fraction of the data
 if DEBUG:
     NROWS_TEST = 25_000
     NROWS_TRAIN = 5_000_000
-    NROWS_VAL = 1_000_000
+    NROWS_VAL = 100_000
 else:
     NROWS_TEST = 100_000
-    NROWS_TRAIN = 20_000_000
-    NROWS_VAL = 2_000_000
+    NROWS_TRAIN = 80_000_000
+    NROWS_VAL = 1_000_000
 
 
 #%%
-train_csv = DATA_DIR+'/train.csv'
 train_parquet = DATA_DIR+'/cv2_train.parquet'
 valid_parquet = DATA_DIR+'/cv2_valid.parquet'
 question_file = DATA_DIR+'/questions.csv'
@@ -111,6 +110,37 @@ Q_DTYPES =  {'content_id': 'int16',
             'tag_acc_count': 'int32',
             'tag_acc_max': 'float32',
             'tag_acc_min': 'float32'}
+
+questions_feat_df = pd.read_csv(question_feat_file).fillna(0).astype(Q_DTYPES)
+parts_feat_df = pd.read_csv(part_feat_file)
+questions_df = pd.read_csv(question_file)
+questions_df['part'] = questions_df['part'].astype(np.int8)
+questions_df['bundle_id'] = questions_df['bundle_id'].astype(np.int32)
+#%% Read data
+
+                
+with timer("Loading and processing train"):
+    train = pd.read_parquet(train_parquet, columns=list(TRAIN_DTYPES.keys()))
+    train = train.iloc[-NROWS_TRAIN:]
+    train = train.astype(TRAIN_DTYPES)
+    train = preprocess_lgb(train)
+
+with timer("Loading and processing valid"):
+    valid = pd.read_parquet(valid_parquet, columns=list(TRAIN_DTYPES.keys()))
+    valid = valid.iloc[:NROWS_VAL]
+    valid = valid.astype(TRAIN_DTYPES)
+    valid = preprocess_lgb(valid)
+
+prior_question_elapsed_time_mean = 13005.081
+
+#%% loading all train for debugging
+# if not DEBUG:
+#     with timer("Loading all train data"):
+#         all_train = dt.fread(DATA_DIR+'train.csv', 
+#                 columns=set(TRAIN_DTYPES.keys())).to_pandas().astype(TRAIN_DTYPES)
+
+
+#%% merging question feature by https://www.kaggle.com/gaozhanfire/offline-group-by-table
 question_feats = [
                 'question_elapsed_time_mean',
                 'question_had_explanation_mean',
@@ -120,20 +150,11 @@ question_feats = [
                 'tag_acc_count',
                 'tag_acc_max',
                 'tag_acc_min']
-questions_feat_df = pd.read_csv(question_feat_file).fillna(0).astype(Q_DTYPES)
-parts_feat_df = pd.read_csv(part_feat_file)
-questions_df = pd.read_csv(question_file)
-questions_df['part'] = questions_df['part'].astype(np.int32)
-questions_df['bundle_id'] = questions_df['bundle_id'].astype(np.int32)
-#%% Read data
-          
-with timer("Loading and processing train"):
-    train = dt.fread(train_csv, columns=set(TRAIN_DTYPES.keys())).to_pandas().astype(TRAIN_DTYPES)
-    if DEBUG:
-        train = train.iloc[-NROWS_TRAIN:]
-    train = preprocess_lgb(train) # merging with questions_df
+train = pd.merge(train, questions_feat_df[['content_id'] + question_feats], 
+                    left_on = 'content_id', right_on = 'content_id', how = 'left')
 
-prior_question_elapsed_time_mean = 13005.081
+valid = pd.merge(valid, questions_feat_df[['content_id'] + question_feats], 
+                    left_on = 'content_id', right_on = 'content_id', how = 'left')
 #%%
 # user dicts
 answered_correctly_u_count_dict = defaultdict(int)
@@ -462,7 +483,29 @@ def add_features_new(all_data,
             ###在即将换task的时候，把旧组需要换成新组（更换成新组之前，需要先把旧组的信息在上面用完）
         #==================  end update for train ====================
 
+    all_data['answered_correctly_u_avg']=answered_correctly_u_avg
+    all_data['answered_correctly_u_count']=answered_correctly_u_count
+    all_data['answered_correctly_uq_count']=answered_correctly_uq_count
+    all_data['elapsed_time_u_avg_corrected']=elapsed_time_u_avg
+    all_data['explanation_u_avg_corrected']=explanation_u_avg
+    all_data['question_correct_rate_last_20_mean']=question_correct_rate_last_20_sum
+    all_data['question_correct_rate_last_6_mean']=question_correct_rate_last_6_sum
+    all_data['part_user_count']=part_user_count
+    all_data['part_user_mean']=part_user_mean
+    all_data['timestamp_u_correct_recency_1']=timestamp_u_correct_recency_1
+    all_data['timestamp_u_incorrect_recency_1']=timestamp_u_incorrect_recency_1
+    all_data['timestamp_u_diff_1_2']=timestamp_u_diff_1
+    all_data['timestamp_u_diff_2_3']=timestamp_u_diff_2
+    all_data['timestamp_u_diff_3_end']=timestamp_u_diff_3
+    all_data['user_tag_acc_count']=user_tag_acc_count
+    all_data['user_tag_acc_max']=user_tag_acc_max
+    all_data['user_tag_acc_min']=user_tag_acc_min
 
+    return all_data
+
+
+
+#%%
 def add_features_test_new(test_df):
     # user features
     len_data = len(test_df)
@@ -690,7 +733,7 @@ def add_features_test_new(test_df):
 
     return test_df
 
-# function for inference
+# %% function for inference
 def update_features(df, 
                     # answered_correctly_u_count_dict,
                     # answered_correctly_u_sum_dict,
@@ -819,111 +862,24 @@ def update_features(df,
                             timestamp_u_incorrect_dict[user_id].append(single_row_last_user_task_table[6])
                 list_last_user_task_table=[]
                 ###在即将换task的时候，把旧组需要换成新组（更换成新组之前，需要先把旧组的信息在上面用完）
-#%%
+            
 
-print('\nUser feature calculation started...\n')
-add_features_new(train)
-gc.collect();
-user_ids = train[['user_id']].unique().values
-del train
+#%%
+len_train = len(train)
+train = pd.concat([train, valid], axis=0)
+train = add_features_new(train)
+
+valid = train.iloc[len_train:]
+train = train.iloc[:len_train]
 gc.collect();
 print('\nUser feature calculation completed...\n')
 
-
-# %% dumping dicts
-with open(os.path.join(DATA_DIR, 'answered_correctly_u_count_dict.pickle'), 'wb') as f:
-    pickle.dump(answered_correctly_u_count_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
-    
-with open(os.path.join(DATA_DIR, 'answered_correctly_u_sum_dict.pickle'), 'wb') as f:
-    pickle.dump(answered_correctly_u_sum_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-with open(os.path.join(DATA_DIR, 'elapsed_time_u_sum_dict.pickle'), 'wb') as f:
-    pickle.dump(elapsed_time_u_sum_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
-    
-with open(os.path.join(DATA_DIR, 'explanation_u_sum_dict.pickle'), 'wb') as f:
-    pickle.dump(explanation_u_sum_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
-    
-with open(os.path.join(DATA_DIR, 'question_u_count_dict.pickle'), 'wb') as f:
-    pickle.dump(question_u_count_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
-    
-with open(os.path.join(DATA_DIR, 'question_u_last_bundle_count_dict.pickle'), 'wb') as f:
-    pickle.dump(question_u_last_bundle_count_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-with open(os.path.join(DATA_DIR,'question_correct_last_20_count_dict.pickle'), 'wb') as f:
-    pickle.dump(question_correct_last_20_count_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
-with open(os.path.join(DATA_DIR,'question_correct_last_20_sum_dict.pickle'), 'wb') as f:
-    pickle.dump(question_correct_last_20_sum_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
-with open(os.path.join(DATA_DIR,'question_correct_last_20_all_dict.pickle'), 'wb') as f:
-    pickle.dump(question_correct_last_20_all_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
-    
-with open(os.path.join(DATA_DIR,'question_correct_last_6_count_dict.pickle'), 'wb') as f:
-    pickle.dump(question_correct_last_6_count_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
-with open(os.path.join(DATA_DIR,'question_correct_last_6_sum_dict.pickle'), 'wb') as f:
-    pickle.dump(question_correct_last_6_sum_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
-with open(os.path.join(DATA_DIR,'question_correct_last_6_all_dict.pickle'), 'wb') as f:
-    pickle.dump(question_correct_last_6_all_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
-    
-with open(os.path.join(DATA_DIR,'timestamp_u_correct_dict.pickle'), 'wb') as f:
-    pickle.dump(timestamp_u_correct_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
-    
-with open(os.path.join(DATA_DIR,'timestamp_u_incorrect_dict.pickle'), 'wb') as f:
-    pickle.dump(timestamp_u_incorrect_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
-    
-with open(os.path.join(DATA_DIR,'timestamp_u_dict.pickle'), 'wb') as f:
-    pickle.dump(timestamp_u_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-# del timestamp_u_correct_dict, timestamp_u_incorrect_dict, timestamp_u_dict    
-# del question_correct_last_20_count_dict, question_correct_last_20_sum_dict, question_correct_last_20_all_dict
-# del question_correct_last_6_count_dict, question_correct_last_6_sum_dict, question_correct_last_6_all_dict
-# del elapsed_time_u_sum_dict, explanation_u_sum_dict, question_u_count_dict, question_u_last_bundle_count_dict
-# del answered_correctly_u_sum_dict, answered_correctly_u_count_dict 
-
-#%% 
-answered_correctly_uq_dict_tmp = defaultdict(int)
-
-for user_id in tqdm(user_ids):
-    answered_correctly_uq_dict_tmp[user_id] = answered_correctly_uq_dict[user_id]
-
-with open(os.path.join(DATA_DIR,'answered_correctly_uq_dict.pickle'), 'wb') as f:
-    pickle.dump(answered_correctly_uq_dict_tmp, f, protocol=pickle.HIGHEST_PROTOCOL)
-
 #%%
-part_user_count_dict_tmp = defaultdict(int)
+valid.to_parquet(os.path.join(DATA_DIR,'valid_loop_feat.parquet'))
+train.to_parquet(os.path.join(DATA_DIR,'train_loop_feat.parquet'))
 
-for user_id in tqdm(user_ids):
-    part_user_count_dict_tmp[user_id] = part_user_count_dict[user_id]
-
-with open(os.path.join(DATA_DIR,'part_user_count_dict.pickle'), 'wb') as f:
-    pickle.dump(part_user_count_dict_tmp, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-#%%
-part_user_sum_dict_tmp = defaultdict(int)
-
-for user_id in tqdm(user_ids):
-    part_user_sum_dict_tmp[user_id] = part_user_sum_dict[user_id]
-
-with open(os.path.join(DATA_DIR,'part_user_sum_dict.pickle'), 'wb') as f:
-    pickle.dump(part_user_sum_dict_tmp, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-#%%
-user_tag_acc_count_dict_tmp = defaultdict(int)
-
-for user_id in tqdm(user_ids):
-    user_tag_acc_count_dict_tmp[user_id] = user_tag_acc_count_dict[user_id]
-
-with open(os.path.join(DATA_DIR,'user_tag_acc_count_dict.pickle'), 'wb') as f:
-    pickle.dump(user_tag_acc_count_dict_tmp, f, protocol=pickle.HIGHEST_PROTOCOL)
-
-#%%
-user_tag_acc_sum_dict_tmp = defaultdict(int)
-
-for user_id in tqdm(user_ids):
-    user_tag_acc_sum_dict_tmp[user_id] = user_tag_acc_sum_dict[user_id]
-
-with open(os.path.join(DATA_DIR,'user_tag_acc_sum_dict.pickle'), 'wb') as f:
-    pickle.dump(user_tag_acc_sum_dict_tmp, f, protocol=pickle.HIGHEST_PROTOCOL)
-#%% inference
-# load lgb model
+# %% training and evaluation
+    
 target = 'answered_correctly'
 # Features to train and predict
 features = ['answered_correctly_u_avg',
@@ -959,8 +915,94 @@ features = ['answered_correctly_u_avg',
             'user_tag_acc_max',
             'user_tag_acc_min']
 
-model_file = os.path.join(MODEL_DIR, 'lgb_loop_final_auc_0.7916.txt')
-model = lgb.Booster(model_file=model_file)
+
+features_simple = ['answered_correctly_u_avg',
+            'elapsed_time_u_avg_corrected',
+            'explanation_u_avg_corrected',
+            'part_user_count',
+            'part_user_mean',
+            'prior_question_elapsed_time',###原始
+            'question_correct_rate_last_20_mean',
+            'question_correctly_q_mean',###线下
+            'question_elapsed_time_mean',###线下
+            'question_had_explanation_mean',###线下
+            'timestamp_u_correct_recency_1',
+            'timestamp_u_diff_1_2',
+            'timestamp_u_diff_2_3',
+            'timestamp_u_diff_3_end',
+            'timestamp_u_incorrect_recency_1',
+            ]
+
+#%% 
+print(f'Before drop train: {train.shape[0]} rows and {len(features)} features')   
+#%%
+if not DEBUG:
+    train = train[-NROWS_TRAIN//2:]
+    gc.collect();
+
+# drop_cols = list(set(train.columns).difference(features))
+drop_cols = list(set(train.columns).difference(features_simple))
+y_train = train[target].values.astype('int8')
+y_val = valid[target].values.astype('int8')
+# Drop unnecessary columns
+train.drop(drop_cols, axis = 1, inplace = True)
+valid.drop(drop_cols, axis = 1, inplace = True)
+gc.collect();
+#%%
+lgb_train = lgb.Dataset(train[features].astype(np.float32), label=y_train)
+lgb_valid = lgb.Dataset(valid[features].astype(np.float32), label=y_val)
+
+#%%
+del train, y_train
+gc.collect();
+#%%
+params = {'objective': 'binary', 
+            'seed': SEED,
+            'metric': 'auc',
+            'max_bin': 700,
+            # 'min_child_weight': 0.05,
+            'min_data_in_leaf': 512,
+            'num_leaves': 160,
+            'feature_fraction': 0.75,
+            'learning_rate': 0.1,
+            'subsample_freq': 2,
+            'subsample': 0.75,
+            'max_depth': 12
+            }
+
+model = lgb.train(
+    params = params,
+    train_set = lgb_train,
+    num_boost_round = 3000,
+    valid_sets = [lgb_train, lgb_valid],
+    early_stopping_rounds = 20,
+    verbose_eval = 20
+)
+val_auc = roc_auc_score(y_val, model.predict(valid[features]))
+print(f'AUC score for the validation data is: {val_auc:.4f}')
+model_name = f'lgb_loop_simple_auc_{val_auc:.4f}.txt'
+model.save_model(os.path.join(MODEL_DIR,model_name)) 
+
+#%%
+feature_importance = model.feature_importance()
+feature_importance = pd.DataFrame({'Features': features, 
+                                    'Importance': feature_importance})\
+                        .sort_values('Importance', ascending = False)
+
+fig = plt.figure(figsize = (8, 10))
+fig.suptitle('Feature Importance', fontsize = 20)
+plt.tick_params(axis = 'x', labelsize = 12)
+plt.tick_params(axis = 'y', labelsize = 12)
+plt.xlabel('Importance', fontsize = 15)
+plt.ylabel('Features', fontsize = 15)
+sns.barplot(x = feature_importance['Importance'], y = feature_importance['Features'], orient = 'h')
+plt.show()
+
+  
+
+#%% inference
+# load feature dict
+
 #%%
 with timer("Loading cv2 group and private simulated test set"):
     all_test_df = pd.read_parquet(os.path.join(DATA_DIR,'cv2_valid.parquet'))
