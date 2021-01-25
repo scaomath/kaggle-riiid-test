@@ -178,8 +178,14 @@ def roc_auc_compute_fn(y_targets, y_preds):
     y_pred = y_preds.cpu().numpy()
     return roc_auc_score(y_true, y_pred)
 
-def argmax(lst):
-  return lst.index(max(lst))
+def argmax(seq):
+  return seq.index(max(seq))
+
+def argsort(seq):
+    '''
+    http://stackoverflow.com/questions/3071415/efficient-method-to-calculate-the-rank-vector-of-a-list-in-python
+    '''
+    return sorted(range(len(seq)), key=seq.__getitem__)
 
 def get_num_params(model):
     model_parameters = filter(lambda p: p.requires_grad, model.parameters())
